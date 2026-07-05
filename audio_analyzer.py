@@ -10,9 +10,12 @@ import sounddevice as sd
 import numpy as np
 from collections import deque
 import threading
+from debug_logger import debug as debug_log
 
 
 class AudioAnalyzer:
+    AGC_WARMUP_BLOCKS = 20  # ~1s a blocksize=2048/44100Hz
+
     def __init__(self, device=8, channels=2, samplerate=44100, blocksize=2048):
         self.device = device
         self.channels = channels
@@ -56,6 +59,13 @@ class AudioAnalyzer:
         self.max_bass = 1.0
         self.max_mid = 1.0
         self.max_high = 1.0
+        # Warm-up: il tetto AGC a regime (alpha=0.9995) impiega ~93s a
+        # raggiungere il livello reale partendo da 1.0 - per quella finestra
+        # bass/mid/high restano tagliati al 100% (nessun kick rilevabile,
+        # zero dinamica visibile). Primi AGC_WARMUP_BLOCKS blocchi (~1s)
+        # usano un adattamento veloce per "scaldare" subito il tetto, poi si
+        # torna al ritmo lento gia' testato a regime.
+        self._agc_block_count = 0
 
         # Livello audio in dBFS (RMS del segnale grezzo, non filtrato per banda),
         # per replicare la logica soglia/tetto del vecchio plugin "Scale to Sound".
@@ -87,6 +97,7 @@ class AudioAnalyzer:
     def _audio_callback(self, indata, frames, time_info, status):
         """Callback per ogni blocco audio"""
         if status:
+            debug_log(f"[AUDIO] STATUS/XRUN: {status}")
             return
         
         # Converti a mono se stereo
@@ -118,10 +129,16 @@ class AudioAnalyzer:
         mid_mag = np.mean(magnitude[mid_idx]) if len(mid_idx) > 0 else 0
         high_mag = np.mean(magnitude[high_idx]) if len(high_idx) > 0 else 0
         
-        # AGC: adatta dinamicamente
-        self.max_bass = self.max_bass * 0.9995 + bass_mag * 0.0005
-        self.max_mid = self.max_mid * 0.9995 + mid_mag * 0.0005
-        self.max_high = self.max_high * 0.9995 + high_mag * 0.0005
+        # AGC: adatta dinamicamente. Primi blocchi (~1s): alpha veloce per
+        # scaldare subito il tetto partendo da 1.0, poi ritmo lento originale.
+        self._agc_block_count += 1
+        if self._agc_block_count <= self.AGC_WARMUP_BLOCKS:
+            alpha = 0.7
+        else:
+            alpha = 0.9995
+        self.max_bass = self.max_bass * alpha + bass_mag * (1 - alpha)
+        self.max_mid = self.max_mid * alpha + mid_mag * (1 - alpha)
+        self.max_high = self.max_high * alpha + high_mag * (1 - alpha)
         
         # Normalizza 0-100
         bass_norm = (bass_mag / max(self.max_bass, 0.001)) * 100

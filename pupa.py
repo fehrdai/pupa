@@ -7,6 +7,7 @@ import time
 import sys
 import os
 import random
+import sounddevice as sd
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -16,24 +17,46 @@ import brain
 from logger import setup_logger
 
 try:
-    from secrets_local import OBS_HOST, OBS_PORT, OBS_PASSWORD
+    from secrets_local import OBS_HOST, OBS_PORT, OBS_PASSWORD, AUDIO_DEVICE_NAME
 except ImportError:
-    print("[ERROR] secrets_local.py mancante. Copia secrets_local.example.py")
-    print("        in secrets_local.py e inserisci le credenziali reali di OBS.")
+    print("[ERROR] secrets_local.py mancante o incompleto. Copia secrets_local.example.py")
+    print("        in secrets_local.py e inserisci le credenziali OBS e il nome del")
+    print("        device audio di questa macchina (vedi list_audio_devices.py).")
     sys.exit(1)
+
+# PULSE_SOURCE: opzionale, solo Linux/PipeWire - pinna la sorgente pulse a
+# un device specifico invece del default di sistema (che puo' cambiare e
+# rompere silenziosamente la cattura). Non serve su Windows.
+try:
+    from secrets_local import PULSE_SOURCE
+except ImportError:
+    PULSE_SOURCE = None
+
+if PULSE_SOURCE:
+    os.environ.setdefault("PULSE_SOURCE", PULSE_SOURCE)
 
 CONFIG = {
     "obs_host": OBS_HOST,
     "obs_port": OBS_PORT,
     "obs_password": OBS_PASSWORD,
-    # ATTENZIONE PORTING: questo ID e' specifico della macchina Windows
-    # attuale ("Microsoft Sound Mapper - Input"). Su Linux (o qualsiasi
-    # altra macchina) gli ID dei device audio sono enumerati diversamente:
-    # rieseguire list_audio_devices.py e aggiornare questo valore. Vedi
-    # LINUX_PORTING.md per i dettagli (su Linux cercare un device "Monitor",
-    # non "Stereo Mix" che non esiste li').
-    "audio_device": 0,  # Microsoft Sound Mapper - Input (SOLO su questa macchina Windows)
+    "audio_device_name": AUDIO_DEVICE_NAME,
 }
+
+
+def _resolve_audio_device(name):
+    """L'indice numerico PortAudio di un device NON e' garantito stabile tra
+    riavvii (osservato su Linux/PipeWire spostarsi 22 -> 19 -> 22 -> 18 nella
+    stessa sessione, a seconda di quali sorgenti risultano attive al
+    momento) - risolverlo per nome ad ogni avvio invece di hardcodare un
+    indice fisso in config."""
+    for i, d in enumerate(sd.query_devices()):
+        if d["name"] == name and d["max_input_channels"] > 0:
+            return i
+    raise RuntimeError(
+        f"Device audio '{name}' non trovato. Rilancia list_audio_devices.py "
+        f"e aggiorna AUDIO_DEVICE_NAME in secrets_local.py."
+    )
+
 
 TRANSITION_MS = 2500
 
@@ -56,7 +79,7 @@ TRANSITION_MS = 2500
 # NON era mai stato confermato risolto dal vivo nonostante il throttle.
 #
 # SCALE_TO_SOUND_TARGETS = {
-#     "waveform_kick": ["Audio Shader Engine"],
+#     "wave_kick": ["Audio Shader Engine"],
 #     "strobo_B": ["Colore"],
 # }
 # SCALE_MIN_SIZE = 0.0     # 0% -> invisibile sotto soglia
@@ -141,11 +164,14 @@ def main():
     # smoothed_scale_by_scene = {scene_name: SCALE_MIN_SIZE for scene_name in scale_targets}
     # scale_tick_counter_by_scene = {scene_name: 0 for scene_name in scale_targets}
     # SCALE_PUSH_EVERY_N_TICKS = {
-    #     "waveform_kick": 3,
+    #     "wave_kick": 3,
     #     "strobo_B": 1,
     # }
 
-    audio = AudioAnalyzer(device=CONFIG["audio_device"])
+    audio_device = _resolve_audio_device(CONFIG["audio_device_name"])
+    print(f"[AUDIO] Device '{CONFIG['audio_device_name']}' risolto a index {audio_device}")
+
+    audio = AudioAnalyzer(device=audio_device)
     try:
         audio.start()
     except Exception as e:
@@ -153,8 +179,8 @@ def main():
         import traceback
         traceback.print_exc()
         return
-    
-    print(f"[AUDIO] Device {CONFIG['audio_device']} avviato")
+
+    print(f"[AUDIO] Device {audio_device} avviato")
     
     current_scene = obs.get_current_scene()
     brain.initialize_model(current_scene, time.time())

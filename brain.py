@@ -170,7 +170,7 @@ class HybridCouplesModel:
         self.break_exit_time = None
         self.bass_at_break_exit = 0
 
-        self.temp_b_scene = None  # Temp override per waveform_kick
+        self.temp_b_scene = None  # Temp override per wave_kick
         self.temp_b_scene_time = 0  # Timestamp quando è stato settato
 
         # Direzione dell'ultima transizione decisa (impostata ESPLICITAMENTE
@@ -308,7 +308,7 @@ class HybridCouplesModel:
 
         # wave_kick coinvolto (in entrata o in ritorno): hold piu' lungo,
         # dedicato, per dargli piu' presenza (vedi MIN_WAVE_KICK_DWELL sopra)
-        wave_kick_involved = peek_target_scene == "waveform_kick" or current_scene == "waveform_kick"
+        wave_kick_involved = peek_target_scene == "wave_kick" or current_scene == "wave_kick"
 
         if wave_kick_involved:
             hold_time = random.uniform(*OVERLAP_HOLD_WAVE_KICK)
@@ -436,8 +436,8 @@ class HybridCouplesModel:
         """Ritorna tipo e durata della transizione
 
         - Raffica strobo attiva (frame intermedio): Taglio o White Fade, veloce
-        - waveform_kick (entrata): SEMPRE Stinger, esclusivo
-        - waveform_kick (ritorno a _A): Fade
+        - wave_kick (entrata): SEMPRE Stinger, esclusivo
+        - wave_kick (ritorno a _A): Fade
         - INTRO/BREAK (ciclo wave_kick<->_A): Fade
         - Ciclo energetico principale (BUILD/GROOVE/DROP/PEAK/RELAX): STESSA pool
           random (Burn/Displace/Blur + Cut) per ENTRAMBE le direzioni A->B e B->A;
@@ -476,12 +476,12 @@ class HybridCouplesModel:
                 "kick_mode": "strobe"
             }
 
-        # Ritorno da waveform_kick a _A: Fade (controllato PRIMA del check generico
-        # sotto, perche' temp_b_scene resta "waveform_kick" fino a qui: se il check
+        # Ritorno da wave_kick a _A: Fade (controllato PRIMA del check generico
+        # sotto, perche' temp_b_scene resta "wave_kick" fino a qui: se il check
         # generico venisse prima, intercetterebbe anche il ritorno, non solo l'entrata)
-        if is_return and self.temp_b_scene == "waveform_kick":
+        if is_return and self.temp_b_scene == "wave_kick":
             self.temp_b_scene = None  # Reset temp override
-            debug_log(f"[TRANS] waveform_kick -> A: Fade 2000ms")
+            debug_log(f"[TRANS] wave_kick -> A: Fade 2000ms")
             return {
                 "type": "Fade",
                 "duration_ms": 2000,
@@ -489,9 +489,9 @@ class HybridCouplesModel:
                 "kick_mode": "crescendo"
             }
 
-        # FORCE: waveform_kick SEMPRE Stinger in ENTRATA, bypassa tutto il resto
-        if self.temp_b_scene == "waveform_kick":
-            debug_log(f"[TRANS] waveform_kick -> Stinger 20s")
+        # FORCE: wave_kick SEMPRE Stinger in ENTRATA, bypassa tutto il resto
+        if self.temp_b_scene == "wave_kick":
+            debug_log(f"[TRANS] wave_kick -> Stinger 20s")
             return {"type": "Stinger", "duration_ms": 20000, "is_return": False, "kick_mode": "wave"}
 
         # BREAK: cut/fade alternati, reattivi alla velocita' del crollo bass
@@ -589,9 +589,9 @@ class HybridCouplesModel:
             )
             return self.overlap_base_scene
 
-        # TIMEOUT temp_b_scene (waveform_kick max 20 secondi)
-        if self.temp_b_scene == "waveform_kick" and self.temp_b_scene_time > 0 and (current_time - self.temp_b_scene_time) > 20:
-            debug_log(f"[TIMEOUT] waveform_kick scaduto, reset")
+        # TIMEOUT temp_b_scene (wave_kick max 20 secondi)
+        if self.temp_b_scene == "wave_kick" and self.temp_b_scene_time > 0 and (current_time - self.temp_b_scene_time) > 20:
+            debug_log(f"[TIMEOUT] wave_kick scaduto, reset")
             self.temp_b_scene = None
             self.temp_b_scene_time = 0
 
@@ -653,7 +653,7 @@ class HybridCouplesModel:
         # DROP/PEAK/RELAX mentre siamo ancora su wave_kick). Se questo controllo
         # dipendesse da wave_eligible, la permanenza minima verrebbe bypassata
         # in quel caso, facendo sparire wave_kick troppo in fretta.
-        if self.temp_b_scene == "waveform_kick" and not self.in_scene_a and is_kick:
+        if self.temp_b_scene == "wave_kick" and not self.in_scene_a and is_kick:
             time_on_wave = current_time - self.temp_b_scene_time if self.temp_b_scene_time > 0 else 999
             if time_on_wave < MIN_WAVE_KICK_DWELL:
                 self.last_switch_time = current_time
@@ -710,13 +710,13 @@ class HybridCouplesModel:
                 self.last_switch_time = current_time
 
                 # SOVRAPPOSIZIONE: possibilita' di un peek invece dello switch diretto
-                peek = self._maybe_trigger_overlap("waveform_kick", current_time, current_scene, logger, probability=overlap_prob)
+                peek = self._maybe_trigger_overlap("wave_kick", current_time, current_scene, logger, probability=overlap_prob)
                 if peek:
                     return peek
 
                 self.in_scene_a = False
                 self.last_transition_is_return = False
-                target_scene = "waveform_kick"
+                target_scene = "wave_kick"
                 self.temp_b_scene = target_scene
                 if self.temp_b_scene_time == 0:
                     self.temp_b_scene_time = current_time

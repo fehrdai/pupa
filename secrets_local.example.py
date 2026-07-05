@@ -4,6 +4,15 @@ secrets_local.py e inserisci i valori reali della tua rete/OBS.
 secrets_local.py e' escluso da git (vedi .gitignore).
 """
 
-OBS_HOST = "192.168.1.102"
+OBS_HOST = "192.168.1.102"  # "localhost" se OBS gira sulla stessa macchina
 OBS_PORT = 4455
 OBS_PASSWORD = "cambia-questa-password"
+
+# Nome ESATTO del device audio da usare (vedi list_audio_devices.py).
+# Risolto per nome ad ogni avvio, non per indice numerico: l'indice puo'
+# spostarsi tra riavvii (osservato su Linux/PipeWire).
+AUDIO_DEVICE_NAME = "Microsoft Sound Mapper - Input"
+
+# Opzionale, SOLO Linux/PipeWire: pinna la sorgente pulse a un device
+# specifico invece del default di sistema. Lascia commentato su Windows.
+# PULSE_SOURCE = "alsa_input.pci-0000_00_1b.0.analog-stereo"

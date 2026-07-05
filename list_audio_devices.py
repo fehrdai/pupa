@@ -4,7 +4,12 @@ Diagnostica dei device audio disponibili.
 Esegui questo script per trovare l'ID corretto del device da usare in audio_analyzer.py
 """
 
+import sys
 import sounddevice as sd
+
+# Su Windows la console usa cp1252 di default, che non sa codificare
+# emoji/simboli unicode (es. ✓) e fa crashare lo script a meta' lista.
+sys.stdout.reconfigure(encoding="utf-8")
 
 print("\n" + "="*70)
 print("  AUDIO DEVICE DIAGNOSTICS")
@@ -38,8 +43,8 @@ for i, device in enumerate(devices):
 print("="*70)
 print("\n💡 NEXT STEP:")
 print("1. Trova il device che dice '✓ USABILE COME INPUT' e che vuoi usare")
-print("2. Nota il numero tra [ ] a sinistra (es. [5])")
-print("3. Apri audio_analyzer.py e modifica la riga:")
-print("   self.stream = sd.InputStream(device=5, samplerate=...)")
-print("   (Sostituisci 5 con il numero del device scelto)")
+print("2. Copia il NOME ESATTO (tra parentesi quadre il numero, ma quello")
+print("   NON e' stabile tra riavvii su alcuni sistemi - vedi PUPA_DEVELOPMENT_LOG.md)")
+print("3. Apri secrets_local.py e imposta:")
+print("   AUDIO_DEVICE_NAME = \"<nome esatto del device>\"")
 print("\n")

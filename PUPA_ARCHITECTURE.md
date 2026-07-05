@@ -258,8 +258,10 @@ segnali_A           ↔ ring_B
 ```
 
 ### Scene speciali (non fanno parte del ciclo couples)
-- `waveform_kick` — virtuale (non richiede scena dedicata particolare, gestita
-  via `temp_b_scene` override in brain.py)
+- `wave_kick` — virtuale (non richiede scena dedicata particolare, gestita
+  via `temp_b_scene` override in brain.py). Rinominata da `waveform_kick` il
+  2026-07-05 per allinearsi al nome scena reale in OBS (vedi
+  PUPA_DEVELOPMENT_LOG.md).
 - `strobo_B`, `strobo_A` — scena bianca/effetto per la raffica strobo
 - `NERO_MASTER` — scena nera (kill-switch, non attivo nel codice corrente)
 
