@@ -89,26 +89,26 @@ def _resolve_audio_device(name):
 TRANSITION_MS = 2500
 
 # ============================================================================
-# SCALE-TO-SOUND — DISATTIVATO (2026-07-03)
+# SCALE-TO-SOUND — DISATTIVATO DI NUOVO (2026-07-06)
 # ============================================================================
-# Motivo: dopo vari fix (bug cache rendering OBS + refresh disable/enable,
-# smoothing per-scena, throttle, ricalibrazione dB) wave_kick restava
-# comunque fermo in Program (funzionava solo in Preview, causa non risolta),
-# e strobo_B reagiva ma troppo lentamente. L'utente ha tolto strobo_B dallo
-# scale-to-sound (la scena funziona bene visivamente anche senza scalare), e
-# per ora anche wave_kick (dove "Immagine 2" e' stata sostituita con "Audio
-# Shader Engine", una sorgente gia' reattiva di suo che non necessita del
-# nostro scale-to-sound manuale).
+# Ri-testato oggi con audio finalmente pulito (VB-Cable, niente piu' clipping/
+# mic debole) per verificare se i due bug storici fossero in realta' causati
+# dal segnale audio scadente di allora. Risultato: NO, sono ricomparsi
+# IDENTICI anche con audio corretto:
+#   1. Posizione che scivola in basso-sx invece di restare centrata
+#      (nonostante il ricalcolo del centro in set_source_scale())
+#   2. Invisibile/fermo in Program, funziona solo in Preview - il mistero
+#      originale, ora confermato NON dipendere dall'audio
+# Conclusione: e' un comportamento di basso livello di OBS (Program/Preview
+# sembrano avere cache di rendering separate per lo stesso scene item), non
+# risolvibile con chiamate WebSocket generiche come il nostro toggle
+# disable->enable. Non vale lo sforzo di continuare a rincorrerlo - si e'
+# passati a testare il filtro Shadertastic nativo sulla sorgente invece.
 #
-# Codice tenuto per riferimento/eventuale riattivazione futura, non cancellato.
-# Se si riattiva: verificare PRIMA il nome della sorgente in wave_kick (ora
-# "Audio Shader Engine", non piu' "Immagine 2") e il bug "fermo in Program"
-# (vedi PUPA_DEVELOPMENT_LOG.md "MISTERO RISOLTO" + "Aggiornamento 6") che
-# NON era mai stato confermato risolto dal vivo nonostante il throttle.
+# Codice tenuto per riferimento, non cancellato.
 #
 # SCALE_TO_SOUND_TARGETS = {
-#     "wave_kick": ["Audio Shader Engine"],
-#     "strobo_B": ["Colore"],
+#     "wave_kick": ["Immagine 2"],
 # }
 # SCALE_MIN_SIZE = 0.0     # 0% -> invisibile sotto soglia
 # SCALE_MAX_SIZE = 1.0     # 100% -> dimensione originale al tetto
@@ -193,7 +193,6 @@ def main():
     # scale_tick_counter_by_scene = {scene_name: 0 for scene_name in scale_targets}
     # SCALE_PUSH_EVERY_N_TICKS = {
     #     "wave_kick": 3,
-    #     "strobo_B": 1,
     # }
 
     if PULSE_SOURCE and AUDIO_INPUT_GAIN_PCT is not None:
