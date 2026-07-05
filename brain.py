@@ -108,6 +108,19 @@ STROBE_BURST_PROBABILITY = {
 }
 STROBE_TRANSITION_CHOICES = ["Taglio", "White Fade"]  # provate entrambe, scelta random ad ogni raffica
 
+# LAMPO SINGOLO in GROOVE/BUILD: un solo ON+OFF (non una raffica completa),
+# innescato solo sul kick PIU' ALTO letto finora nello stato corrente (nuovo
+# "massimo personale" dentro GROOVE/BUILD, non un kick qualunque), e comunque
+# solo con probabilita' (non garantito anche quando lo e'). Riusa la stessa
+# macchina a stati della raffica strobo, con STROBE_FLASH_STEPS al posto di
+# STROBE_BURST_COUNT*2.
+FLASH_STATES = (State.GROOVE, State.BUILD)
+STROBE_FLASH_STEPS = 2  # 1 ON + 1 OFF = un singolo lampo
+STROBE_FLASH_PROBABILITY = {
+    State.GROOVE: 0.12,
+    State.BUILD: 0.18,
+}
+
 # SOVRAPPOSIZIONE: "peek" verso l'altra scena, spinto al 40-60% di blend, mantenuto
 # li' per un tempo prolungato, poi tornato indietro (0%) alla scena di partenza.
 # Non e' un "hold" che completa verso il target: e' un'anteprima che poi si annulla.
@@ -164,6 +177,7 @@ class HybridCouplesModel:
         self.bass_history = deque(maxlen=30)  # Per calcolare trend energy
         self.last_bass = 0  # Ultimo valore bass live, per modulazione continua
         self.last_bass_avg = 0  # Ultima media bass, per calcolare la velocita' del break
+        self.recent_kick_peak_bass = 0  # Massimo kick visto nello stato corrente (per il lampo singolo GROOVE/BUILD)
 
         # Tracciamento uscita da BREAK: per estendere lo spazio di wave_kick
         # in BUILD/GROOVE durante una risalita rapida post-break
@@ -249,6 +263,29 @@ class HybridCouplesModel:
         self.current_b_scene = self._select_b_scene(self.current_couple_a, exclude=self.last_shown_b_scene)
         self.last_shown_b_scene = self.current_b_scene
         return self.current_b_scene
+
+    def _trigger_strobe(self, current_scene, total_steps):
+        """Predispone una raffica strobo/lampo (self.burst_active=True), pronta
+        per essere avanzata da _advance_burst(). total_steps=2 (1 ON+1 OFF) per
+        un lampo singolo, STROBE_BURST_COUNT*2 per una raffica completa - stessa
+        macchina a stati in entrambi i casi, cambia solo la lunghezza."""
+        self.burst_total_steps = total_steps
+        self.burst_step = -1  # verra' incrementato a 0 dentro _advance_burst
+        self.burst_back_scene = current_scene
+        self.burst_transition_choice = random.choice(STROBE_TRANSITION_CHOICES)
+        self.burst_active = True
+
+        # Dove atterrare DOPO il burst/lampo: stessa logica del ciclo normale.
+        # Rotazione reale del pool _B fatta QUI (commit certo), non
+        # speculativamente prima di sapere se saremmo finiti su burst/
+        # overlap/switch diretto — altrimenti tentativi assorbiti
+        # intermedi possono far ripetere per caso l'ultima _B mostrata.
+        if self.in_scene_a:
+            self.burst_return_scene = self._roll_next_b_scene()
+            self.burst_return_is_a = False
+        else:
+            self.burst_return_scene = self.current_couple_a
+            self.burst_return_is_a = True
 
     def _advance_burst(self, current_time, current_scene, logger):
         """Avanza di UN frame la raffica strobo attiva (assume self.burst_active == True).
@@ -399,6 +436,7 @@ class HybridCouplesModel:
         if new_state != self.current_state:
             self.current_state = new_state
             self.state_start_time = current_time
+            self.recent_kick_peak_bass = 0  # nuovo stato, si riparte a cercare il "kick piu' alto"
 
     def _get_overlap_probability(self):
         """Probabilita' di sovrapposizione basata sullo stato corrente: ZERO
@@ -780,25 +818,19 @@ class HybridCouplesModel:
             # del normale singolo switch, con probabilita' crescente per stato
             burst_prob = STROBE_BURST_PROBABILITY.get(self.current_state, 0.0)
             if burst_prob > 0 and random.random() < burst_prob:
-                self.burst_total_steps = STROBE_BURST_COUNT * 2
-                self.burst_step = -1  # verra' incrementato a 0 dentro _advance_burst
-                self.burst_back_scene = current_scene
-                self.burst_transition_choice = random.choice(STROBE_TRANSITION_CHOICES)
-                self.burst_active = True
-
-                # Dove atterrare DOPO il burst: stessa logica del ciclo normale.
-                # Rotazione reale del pool _B fatta QUI (commit certo), non
-                # speculativamente prima di sapere se saremmo finiti su burst/
-                # overlap/switch diretto — altrimenti tentativi assorbiti
-                # intermedi possono far ripetere per caso l'ultima _B mostrata.
-                if self.in_scene_a:
-                    self.burst_return_scene = self._roll_next_b_scene()
-                    self.burst_return_is_a = False
-                else:
-                    self.burst_return_scene = self.current_couple_a
-                    self.burst_return_is_a = True
-
+                self._trigger_strobe(current_scene, STROBE_BURST_COUNT * 2)
                 return self._advance_burst(current_time, current_scene, logger)
+
+            # LAMPO SINGOLO in GROOVE/BUILD: solo sul kick PIU' ALTO letto finora
+            # nello stato corrente (nuovo "massimo personale", non un kick
+            # qualunque), e comunque solo con probabilita' - non garantito anche
+            # quando lo e'. Vedi FLASH_STATES/STROBE_FLASH_PROBABILITY sopra.
+            if self.current_state in FLASH_STATES and bass > self.recent_kick_peak_bass:
+                self.recent_kick_peak_bass = bass
+                flash_prob = STROBE_FLASH_PROBABILITY.get(self.current_state, 0.0)
+                if flash_prob > 0 and random.random() < flash_prob:
+                    self._trigger_strobe(current_scene, STROBE_FLASH_STEPS)
+                    return self._advance_burst(current_time, current_scene, logger)
 
             # SOVRAPPOSIZIONE: possibilita' di un peek invece dello switch diretto
             # (probabilita' ZERO durante BUILD/GROOVE/DROP/PEAK — vedi _get_overlap_probability)
