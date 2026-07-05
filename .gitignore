@@ -1,0 +1,11 @@
+secrets_local.py
+.claude/settings.local.json
+
+__pycache__/
+*.pyc
+
+logs/
+debug.log
+debug.log.*
+
+python-3.14.6-amd64.exe

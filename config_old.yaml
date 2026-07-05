@@ -1,0 +1,9 @@
+obs:
+  host: "localhost"
+  port: 4455
+  password: "REDACTED-vedi-secrets_local.py"
+
+project:
+  name: "PUPA"
+  version: "0.1-Heartbeat"
+  loop_interval: 12  # secondi tra un cambio scena e l'altro

@@ -1,0 +1,77 @@
+# PUPA v0.4 - Disciplined Couples Configuration
+# ===================================================================
+
+## SCENE COUPLES (A = corpo principale, B = riempimento/transizione)
+## Personalizza i pool di B per ogni A in base al tuo gusto
+
+couples:
+  # Coppia 1: Urban/Cyber
+  urbanfree_A:
+    duration_seconds: 240  # 4 minuti
+    b_pool: [spectrumbar_B, radialspike_B, tunnelwave_B]
+  
+  # Coppia 2: Psicodelic
+  psicodance_A:
+    duration_seconds: 300  # 5 minuti
+    b_pool: [stormlightning_B, waveform1_B, ring_B]
+  
+  # Coppia 3: Montezuma
+  montezuma_A:
+    duration_seconds: 240
+    b_pool: [roundedbar_B, projectx_B, waveform2_B]
+  
+  # Coppia 4: Kusanagi (cyber anime)
+  kusanagi_A:
+    duration_seconds: 280
+    b_pool: [spectrumbar_B, radialspike_B, stormlightning_B]
+  
+  # Coppia 5: MRI
+  mri_A:
+    duration_seconds: 320  # 5.3 minuti
+    b_pool: [waveform1_B, ring_B, tunnelwave_B]
+  
+  # Coppia 6: FutureFlash
+  futureflash_A:
+    duration_seconds: 250
+    b_pool: [roundedbar_B, waveform2_B, projectx_B]
+  
+  # Coppia 7: Segnali
+  segnali_A:
+    duration_seconds: 270
+    b_pool: [spectrumbar_B, stormlightning_B, ring_B]
+
+
+## TRANSIZIONE BEHAVIOR
+transitions:
+  # Numero di scene B prima di cambiare coppia
+  max_b_transitions_before_couple_change: 3
+  
+  # Tempo transizione tra scene (ms)
+  transition_duration_ms: 2500
+  
+  # Se drop è rilevato, cambio coppia immediatamente
+  drop_triggers_couple_change: true
+  
+  # Se kick mentre in B, torna ad A della stessa coppia
+  kick_returns_to_a: true
+
+
+## AUDIO THRESHOLDS (per kick/drop detection)
+audio:
+  kick_threshold_bass_delta: 14
+  kick_threshold_bass_min: 60
+  kick_cooldown_ms: 220
+  
+  drop_threshold_bass: 75
+  drop_threshold_bass_hist_avg: 35
+  
+  break_threshold_bass: 20
+  break_threshold_bass_hist_avg: 50
+  break_threshold_mid: 30
+
+
+## LOGGING
+logging:
+  log_file: logs/pupa_v04.log
+  log_decisions: true
+  log_audio_metrics: false

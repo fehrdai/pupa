@@ -1,0 +1,75 @@
+scenes:
+  # Scene Principali (_A) — Video Media + Effetti
+  - name: "futureflash_A"
+    energy: "high"
+    tags: ["video", "media", "retro", "shadertastic"]
+  
+  - name: "montezuma_A"
+    energy: "high"
+    tags: ["video", "media", "scale-to-sound", "shadertastic"]
+
+  - name: "kusanagi_A"
+    energy: "medium"
+    tags: ["video", "media", "retro", "false-color"]
+
+  - name: "psicodance_A"
+    energy: "high"
+    tags: ["video", "media", "retro", "shadertastic"]
+
+  - name: "segnali_A"
+    energy: "medium"
+    tags: ["video", "media", "scale-to-sound", "shadertastic"]
+
+  - name: "urbanfree_A"
+    energy: "medium"
+    tags: ["video", "media", "retro", "shadertastic"]
+
+  - name: "mri_A"
+    energy: "low"
+    tags: ["video", "media", "ambient", "visualizer"]
+
+  # Scene di Transizione (_B) — Audio Shaders + Effetti Rapidi
+  - name: "strobo_B"
+    energy: "high"
+    tags: ["strobo", "audio-reactive", "video", "fast"]
+
+  - name: "spectrumbar_B"
+    energy: "high"
+    tags: ["audio-shader", "generative", "reactive"]
+
+  - name: "radialspike_B"
+    energy: "high"
+    tags: ["audio-shader", "generative", "reactive"]
+
+  - name: "roundedbar_B"
+    energy: "medium"
+    tags: ["audio-shader", "generative", "reactive"]
+
+  - name: "stormlightning_B"
+    energy: "high"
+    tags: ["audio-shader", "generative", "blur"]
+
+  - name: "tunnelwave_B"
+    energy: "medium"
+    tags: ["audio-shader", "generative", "stroke", "ambient"]
+
+  - name: "ring_B"
+    energy: "medium"
+    tags: ["audio-shader", "generative", "reactive"]
+
+  - name: "waveform1_B"
+    energy: "low"
+    tags: ["waveform", "visualizer", "ambient"]
+
+  - name: "waveform2_B"
+    energy: "low"
+    tags: ["waveform", "visualizer", "ambient"]
+
+  - name: "projectx_B"
+    energy: "medium"
+    tags: ["milkdrop", "projectm", "audio-reactive", "ambient"]
+
+  # Scene di Emergenza (Non nella rotazione normale)
+  - name: "Scena 0"
+    energy: "low"
+    tags: ["backup", "emergency"]

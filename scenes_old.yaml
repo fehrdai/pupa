@@ -1,0 +1,48 @@
+scenes:
+  - name: "Scena 0"
+    energy: "low"
+    tags: ["intro", "fissa"]
+
+  - name: "farefesta"
+    energy: "high"
+    tags: ["outro", "fissa"]
+  
+  - name: "futureflash_A"
+    energy: "high"
+    tags: ["media", "retro", "shadertastic"]
+
+  - name: "tunnelwave_B"
+    energy: "medium"
+    tags: ["audio-shader", "generative", "stroke"]
+
+  - name: "projectx_A"
+    energy: "high"
+    tags: ["milkdrop", "audio-reactive", "generative"]
+
+  - name: "ring_B"
+    energy: "medium"
+    tags: ["audio-shader", "generative", "reactive"]
+
+  - name: "montezuma_A"
+    energy: "high"
+    tags: ["media", "scale-to-sound"]
+
+  - name: "kusanagi_B"
+    energy: "medium"
+    tags: ["cyberanime", "retro", "false-color"]
+
+  - name: "psicodance_A"
+    energy: "high"
+    tags: ["media", "retro", "shadertastic"]
+
+  - name: "segnali_B"
+    energy: "medium"
+    tags: ["media", "scale-to-sound"]
+
+  - name: "urbanfree_A"
+    energy: "medium"
+    tags: ["media", "retro"]
+
+  - name: "spectrumbar_B"
+    energy: "high"
+    tags: ["audio-shader", "reactive"]

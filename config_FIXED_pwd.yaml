@@ -1,0 +1,9 @@
+obs:
+  host: "localhost"
+  port: 4455
+  password: "REDACTED-vedi-secrets_local.py"
+
+project:
+  name: "PUPA"
+  version: "0.3-Milestone-3-Kill-Switch"
+  description: "AI-powered VJ brain con rilevamento silenzio e transizioni quantizzate"
