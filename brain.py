@@ -43,6 +43,14 @@ COUPLES = {
     "segnali_A":     ["spectrumbar_B", "ring_B"],
 }
 
+# META-COPPIE tra scene_A: la rotazione libera tra tutte e 7 le scene_A ad
+# ogni cambio COUPLE_DURATION (4min) risultava troppo veloce ("la rotazione
+# tra scene_A deve avvenire piu' lentamente"). Ora ogni META_COUPLE_DURATION
+# (~20min) si sceglie una coppia RANDOMICA di 2 scene_A: per quella finestra,
+# _select_new_couple() attinge SOLO da quelle 2 (alternandosi ogni
+# COUPLE_DURATION come prima), poi si passa a una nuova coppia di scene_A.
+META_COUPLE_DURATION = 1200  # ~20 minuti
+
 # Pool di transizioni "di coppia" per il ciclo energetico A<->B.
 # STESSA pool usata per ENTRAMBE le direzioni (A->B e B->A), scelta randomica.
 # Fade escluso di proposito: riservato alla fase INTRO/BREAK e al ritorno da wave_kick,
@@ -69,13 +77,20 @@ CYCLE_TRANSITION_DURATION_MS = {
 
 # Probabilita' di usare un Cut ("Taglio") al posto di Burn/Displace/Blur, per stato.
 # Rarefatta/quasi assente a bassa energia, "pompa" (aumenta) con l'energia.
+# GROOVE alzato da 0.25 a 0.40 su richiesta esplicita ("aumentiamo il numero
+# dei cut... anche in groove e intro").
 CUT_PROBABILITY_BY_STATE = {
     State.BUILD:  0.10,
-    State.GROOVE: 0.25,
+    State.GROOVE: 0.40,
     State.DROP:   0.55,
     State.PEAK:   0.75,
     State.RELAX:  0.05,
 }
+
+# INTRO non usa CUT_PROBABILITY_BY_STATE (ha una sua transizione dedicata in
+# _get_transition_info, wave_kick<->A) - probabilita' di Taglio al posto del
+# Fade di default li', stessa richiesta di sopra estesa a INTRO.
+CUT_PROBABILITY_INTRO = 0.15
 
 # Debounce (frequenza minima tra gli switch) per stato: piu' frequente con l'energia.
 STATE_PARAMS = {
@@ -108,17 +123,22 @@ STROBE_BURST_PROBABILITY = {
 }
 STROBE_TRANSITION_CHOICES = ["Taglio", "White Fade"]  # provate entrambe, scelta random ad ogni raffica
 
-# LAMPO SINGOLO in GROOVE/BUILD: un solo ON+OFF (non una raffica completa),
-# innescato solo sul kick PIU' ALTO letto finora nello stato corrente (nuovo
-# "massimo personale" dentro GROOVE/BUILD, non un kick qualunque), e comunque
+# LAMPO SINGOLO in GROOVE/BUILD/INTRO: un solo ON+OFF (non una raffica
+# completa), innescato solo sul kick PIU' ALTO letto finora nello stato
+# corrente (nuovo "massimo personale", non un kick qualunque), e comunque
 # solo con probabilita' (non garantito anche quando lo e'). Riusa la stessa
 # macchina a stati della raffica strobo, con STROBE_FLASH_STEPS al posto di
-# STROBE_BURST_COUNT*2.
-FLASH_STATES = (State.GROOVE, State.BUILD)
+# STROBE_BURST_COUNT*2. INTRO aggiunto e probabilita' GROOVE alzata su
+# richiesta esplicita (vedi CUT_PROBABILITY_BY_STATE sopra) - in INTRO NON
+# fa scattare una raffica completa (mai chiesta li'), gestito con una
+# chiamata dedicata dentro il ramo wave_kick (il ciclo A/B normale, dove
+# vive la logica dei lampi, non e' raggiungibile durante INTRO/BREAK).
+FLASH_STATES = (State.GROOVE, State.BUILD, State.INTRO)
 STROBE_FLASH_STEPS = 2  # 1 ON + 1 OFF = un singolo lampo
 STROBE_FLASH_PROBABILITY = {
-    State.GROOVE: 0.12,
+    State.GROOVE: 0.20,
     State.BUILD: 0.18,
+    State.INTRO: 0.15,
 }
 
 # SOVRAPPOSIZIONE: "peek" verso l'altra scena, spinto al 40-60% di blend, mantenuto
@@ -141,9 +161,10 @@ OVERLAP_HOLD_A_TO_B = (0.5, 2.0)   # secondi: sovrapposizione piu' breve (arrivo
 OVERLAP_TARGET_BLEND = (0.4, 0.6)  # frazione di blend raggiunta durante l'hold
 
 # wave_kick: permanenza minima prima di poter tornare a _A (deve avere spazio
-# visibile). Alzato da 3.0 a 6.0: l'utente segnala che wave_kick resta troppo
-# poco visibile nei passaggi rispetto alle scene _A.
-MIN_WAVE_KICK_DWELL = 6.0  # secondi
+# visibile). Era stato alzato 3.0 -> 6.0 per dargli piu' presenza; con la
+# nuova calibrazione audio (AGC a inseguitore di picco) wave_kick ricompare
+# molto piu' spesso, risultando ora troppo lungo - riportato a 3.0.
+MIN_WAVE_KICK_DWELL = 3.0  # secondi
 
 # Sovrapposizione che coinvolge wave_kick specificamente (entrata o ritorno):
 # hold piu' lungo del range generico OVERLAP_HOLD_B_TO_A/A_TO_B, per dargli
@@ -170,6 +191,12 @@ class HybridCouplesModel:
 
         self.couple_history = deque(maxlen=5)
         self.last_switch_time = 0
+
+        # META-COPPIA tra scene_A (vedi META_COUPLE_DURATION sopra): quali 2
+        # scene_A sono "in gioco" per i prossimi ~20 minuti
+        self.meta_couple_start_time = 0
+        self.current_meta_pair = []
+        self.meta_pair_history = deque(maxlen=3)
 
         # STATE MACHINE
         self.current_state = State.INTRO
@@ -220,6 +247,9 @@ class HybridCouplesModel:
             self.current_couple_a = "urbanfree_A"
             self.in_scene_a = False
 
+        self.current_meta_pair = self._select_new_meta_pair()
+        self.meta_couple_start_time = current_time
+
         self.current_b_scene = self._roll_next_b_scene()
         self.couple_start_time = current_time
         self.state_start_time = current_time
@@ -227,11 +257,25 @@ class HybridCouplesModel:
         self.couple_history.append(self.current_couple_a)
         self.last_switch_time = current_time
 
+    def _select_new_meta_pair(self):
+        """Sceglie una nuova coppia randomica di 2 scene_A (vedi
+        META_COUPLE_DURATION): per i prossimi ~20 minuti _select_new_couple()
+        attinge solo da queste 2, invece che liberamente da tutte e 7."""
+        all_a = list(COUPLES.keys())
+        for _ in range(10):
+            pair = tuple(sorted(random.sample(all_a, 2)))
+            if pair not in self.meta_pair_history:
+                break
+        self.meta_pair_history.append(pair)
+        self.current_meta_pair = list(pair)
+        return self.current_meta_pair
+
     def _select_new_couple(self):
-        """Seleziona nuova coppia (esclude ultime 5)"""
-        available = [a for a in COUPLES.keys() if a not in self.couple_history]
+        """Seleziona nuova coppia_A dalla meta-coppia corrente (esclude ultime 5)"""
+        pool = self.current_meta_pair if self.current_meta_pair else list(COUPLES.keys())
+        available = [a for a in pool if a not in self.couple_history]
         if not available:
-            available = list(COUPLES.keys())
+            available = pool
         new_couple = random.choice(available)
         self.couple_history.append(new_couple)
         return new_couple
@@ -264,24 +308,34 @@ class HybridCouplesModel:
         self.last_shown_b_scene = self.current_b_scene
         return self.current_b_scene
 
-    def _trigger_strobe(self, current_scene, total_steps):
+    def _trigger_strobe(self, current_scene, total_steps, return_scene=None, return_is_a=None):
         """Predispone una raffica strobo/lampo (self.burst_active=True), pronta
         per essere avanzata da _advance_burst(). total_steps=2 (1 ON+1 OFF) per
         un lampo singolo, STROBE_BURST_COUNT*2 per una raffica completa - stessa
-        macchina a stati in entrambi i casi, cambia solo la lunghezza."""
+        macchina a stati in entrambi i casi, cambia solo la lunghezza.
+
+        return_scene/return_is_a: override esplicito di dove atterrare dopo il
+        burst/lampo (usato dal lampo in INTRO, che deve restare sulla stessa
+        scena_A invece di saltare su una _B - li' il kick e' "assorbito", non
+        genera un vero switch). Se assenti, usa la logica di default del
+        ciclo A/B normale."""
         self.burst_total_steps = total_steps
         self.burst_step = -1  # verra' incrementato a 0 dentro _advance_burst
         self.burst_back_scene = current_scene
         self.burst_transition_choice = random.choice(STROBE_TRANSITION_CHOICES)
         self.burst_active = True
 
+        if return_scene is not None:
+            self.burst_return_scene = return_scene
+            self.burst_return_is_a = self.in_scene_a if return_is_a is None else return_is_a
+            return
+
         # Dove atterrare DOPO il burst/lampo: stessa logica del ciclo normale.
-        # Rotazione reale del pool _B fatta QUI (commit certo), non
-        # speculativamente prima di sapere se saremmo finiti su burst/
-        # overlap/switch diretto — altrimenti tentativi assorbiti
-        # intermedi possono far ripetere per caso l'ultima _B mostrata.
+        # La scena_B e' quella GIA' fissata per questa coppia (vedi
+        # _roll_next_b_scene, chiamato solo a inizio coppia) - non se ne
+        # sceglie una nuova qui, per non ruotare la _B a meta' coppia.
         if self.in_scene_a:
-            self.burst_return_scene = self._roll_next_b_scene()
+            self.burst_return_scene = self.current_b_scene
             self.burst_return_is_a = False
         else:
             self.burst_return_scene = self.current_couple_a
@@ -555,8 +609,13 @@ class HybridCouplesModel:
             debug_log(f"[TRANS] BREAK reattivo: {trans_type} {duration_ms}ms (drop_rate={drop_rate:.1f}, cut_prob={cut_prob:.2f})")
             return {"type": trans_type, "duration_ms": duration_ms, "is_return": is_return}
 
-        # INTRO: ciclo wave_kick<->_A, sempre Fade (Stinger gia' gestito sopra)
+        # INTRO: ciclo wave_kick<->_A, per lo piu' Fade (Stinger gia' gestito
+        # sopra), con una probabilita' di Taglio al posto del Fade ("aumentiamo
+        # il numero dei cut... anche in groove e intro")
         if self.current_state == State.INTRO:
+            if random.random() < CUT_PROBABILITY_INTRO:
+                debug_log(f"[TRANS] INTRO: Taglio 200ms (cut)")
+                return {"type": "Taglio", "duration_ms": 200, "is_return": is_return}
             debug_log(f"[TRANS] INTRO: Fade 2000ms")
             return {"type": "Fade", "duration_ms": 2000, "is_return": is_return}
 
@@ -659,6 +718,9 @@ class HybridCouplesModel:
         # 1. TIMER COPPIA SCADUTO? (4 minuti)
         # ====================================================================
         if couple_elapsed > self.COUPLE_DURATION:
+            if current_time - self.meta_couple_start_time > META_COUPLE_DURATION:
+                self._select_new_meta_pair()
+                self.meta_couple_start_time = current_time
             self.current_couple_a = self._select_new_couple()
             self.current_b_scene = self._roll_next_b_scene()
             self.couple_start_time = current_time
@@ -783,6 +845,21 @@ class HybridCouplesModel:
             if intro_or_break:
                 # Fase esclusiva: il kick non ha innescato wave_kick, resta su _A
                 self.last_switch_time = current_time
+
+                # LAMPO SINGOLO in INTRO (non BREAK, non richiesto li'): il
+                # ciclo A/B normale (dove vive la logica dei lampi) non e'
+                # raggiungibile qui, quindi va agganciato direttamente in
+                # questo ramo. Resta sulla stessa scena_A (return_scene
+                # esplicito) invece di saltare su una _B - il kick e'
+                # "assorbito", non e' un vero switch.
+                if self.current_state == State.INTRO and bass > self.recent_kick_peak_bass:
+                    self.recent_kick_peak_bass = bass
+                    flash_prob = STROBE_FLASH_PROBABILITY.get(State.INTRO, 0.0)
+                    if flash_prob > 0 and random.random() < flash_prob:
+                        self._trigger_strobe(current_scene, STROBE_FLASH_STEPS,
+                                              return_scene=current_scene, return_is_a=True)
+                        return self._advance_burst(current_time, current_scene, logger)
+
                 return None
             # BUILD/GROOVE in recupero: se wave_kick non scatta, il kick
             # prosegue al ciclo energetico normale sotto (non e' sprecato)
@@ -834,23 +911,17 @@ class HybridCouplesModel:
 
             # SOVRAPPOSIZIONE: possibilita' di un peek invece dello switch diretto
             # (probabilita' ZERO durante BUILD/GROOVE/DROP/PEAK — vedi _get_overlap_probability)
-            # NOTA: candidato calcolato ma NON committato (self._select_b_scene,
-            # non _roll_next_b_scene) finche' non sappiamo che l'overlap scatta
-            # davvero — altrimenti un tentativo di overlap fallito "brucerebbe"
-            # comunque un roll, con lo stesso bug gia' visto per i tentativi
-            # assorbiti (rischio di ripetere per caso l'ultima _B mostrata).
+            # peek_target verso B e' SEMPRE self.current_b_scene (fissata a
+            # inizio coppia, vedi _roll_next_b_scene) - nessuna nuova selezione
+            # qui, per non ruotare la _B a meta' coppia ("per ogni scena_A una
+            # sola scena_B per rotazione").
             if self.in_scene_a:
-                peek_target = self._select_b_scene(self.current_couple_a, exclude=self.last_shown_b_scene)
+                peek_target = self.current_b_scene
             else:
                 peek_target = self.current_couple_a
             peek = self._maybe_trigger_overlap(peek_target, current_time, current_scene, logger,
                                                 probability=self._get_overlap_probability())
             if peek:
-                if self.in_scene_a:
-                    # L'overlap scatta davvero: il peek verso peek_target si vede
-                    # a schermo (anche se e' solo un'anteprima), quindi committa.
-                    self.current_b_scene = peek_target
-                    self.last_shown_b_scene = peek_target
                 return peek
 
             if self.in_scene_a:
@@ -858,15 +929,14 @@ class HybridCouplesModel:
                 # restiamo su _A invece di passare sempre a _B. Il ritorno da
                 # _B (branch sotto) resta invece sempre immediato — asimmetria
                 # voluta per dare piu' presenza a schermo a _A rispetto a _B.
-                # Se assorbito, nessun roll viene committato (si esce prima).
                 if random.random() >= PROB_ENTER_B_ON_KICK:
                     return None
 
                 self.in_scene_a = False
                 self.last_transition_is_return = False  # A -> B
-                # Rotazione reale del pool _B: committata qui, ora che siamo
-                # certi che questa _B verra' davvero mostrata.
-                self._roll_next_b_scene()
+                # NON si rirolla la _B qui: resta quella fissata a inizio
+                # coppia (self.current_b_scene), stessa per tutta la durata
+                # della coppia corrente.
 
                 log_decision(
                     from_scene=current_scene,

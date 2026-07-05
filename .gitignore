@@ -1,5 +1,5 @@
 secrets_local.py
-.claude/settings.local.json
+.claude/
 
 __pycache__/
 *.pyc
