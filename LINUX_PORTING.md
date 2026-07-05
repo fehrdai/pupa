@@ -14,13 +14,48 @@ il porting riguarda solo dove gira lo SCRIPT Python (`pupa.py`), non OBS
 stesso. Se la macchina Linux e OBS sono sulla stessa rete, non serve
 cambiare nulla in `obs_controller.py`.
 
-## Cosa NON copiare sulla macchina Linux
+## Sincronizzazione tra macchine (git)
 
+Il progetto e' ora su GitHub: https://github.com/fehrdai/pupa.git — questo
+sostituisce la copia manuale della cartella. Flusso normale:
+
+**Prima volta su una macchina nuova (es. Linux):**
+```bash
+git clone https://github.com/fehrdai/pupa.git
+cd pupa
+cp secrets_local.example.py secrets_local.py
+# poi modifica secrets_local.py con la password vera di OBS
+# (secrets_local.py e' escluso dal repo via .gitignore, va creato a mano
+# su OGNI macchina)
+```
+
+**Ogni volta che riprendi il lavoro (su qualsiasi macchina):**
+```bash
+git pull
+```
+
+**Dopo aver fatto modifiche che vuoi salvare/portare sull'altra macchina:**
+```bash
+git add -A
+git commit -m "descrizione breve della modifica"
+git push
+```
+
+Regola pratica: `git pull` PRIMA di iniziare a modificare codice su una
+macchina, `git push` DOPO aver finito — cosi' le due macchine (Windows di
+sviluppo/test, Linux del live) non divergono mai in silenzio come successo
+la prima volta (modifiche fatte dal vivo su Linux rimaste solo li').
+
+## Cosa NON e' nel repo (escluso via .gitignore)
+
+- `secrets_local.py` — contiene la password OBS reale, va ricreato a mano
+  su ogni macchina copiando `secrets_local.example.py` (vedi sopra)
 - `python-3.14.6-amd64.exe` — installer Windows, inutile su Linux (su Linux
   Python si installa via package manager: `apt install python3 python3-pip`
   o simile)
 - `__pycache__/` — bytecode compilato, si rigenera da solo
-- `debug.log*`, `logs/` — log della sessione Windows, non servono
+- `debug.log*`, `logs/` — log di sessione, non servono
+- `.claude/settings.local.json` — permessi Claude Code locali alla macchina
 
 ## Dipendenze di sistema (prima di pip install)
 
@@ -78,7 +113,8 @@ correttamente sia su Windows sia su Linux senza modifiche.
 
 ## Checklist riassuntiva
 
-- [ ] Copiare la cartella pupa su Linux (escludendo quanto sopra)
+- [ ] `git clone https://github.com/fehrdai/pupa.git`
+- [ ] `cp secrets_local.example.py secrets_local.py` e inserire la password OBS vera
 - [ ] `sudo apt install libportaudio2 portaudio19-dev python3-dev`
 - [ ] `pip install -r requirements.txt`
 - [ ] `python list_audio_devices.py` — trovare il device giusto (cercare un
