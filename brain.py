@@ -141,6 +141,32 @@ STROBE_FLASH_PROBABILITY = {
     State.INTRO: 0.15,
 }
 
+# FADE reattivo all'energia: corto/veloce se la musica spinge (bass live
+# alto), lungo se e' calma - invece della durata fissa 2000ms usata finora
+# in INTRO e nel ritorno da wave_kick. Stessa logica di modulazione gia'
+# usata per il ciclo A/B principale (bass_factor), ma qui INVERSA: piu'
+# energia = fade PIU' corto (non piu' lungo).
+FADE_DURATION_RANGE = (500, 2800)  # ms: (bass alto -> corto, bass basso -> lungo)
+
+# RAFFICA DI CUT (Taglio): alterna rapidamente scena corrente <-> l'altra
+# della coppia (non strobo_B), tutta in Taglio puro - pensata per i momenti
+# di "riavvolgimento"/pausa breve della musica (bass che scende bruscamente
+# sotto la sua media recente), non per l'energia sostenuta in generale
+# (quella e' gia' coperta da STROBE_BURST/lampo singolo). Riusa la stessa
+# macchina a stati della raffica strobo (_trigger_strobe/_advance_burst),
+# con alt_scene = l'altra scena della coppia invece di STROBE_SCENE.
+CUT_BURST_STEPS = 6  # 3 tagli (ON+OFF) per raffica
+CUT_BURST_INTERVAL = 0.12  # secondi tra un taglio e l'altro
+CUT_BURST_TREND_THRESHOLD = -15.0  # quanto deve scendere bass sotto bass_avg per contare come "pull-back"
+CUT_BURST_COOLDOWN = 2.0  # secondi minimi tra una raffica di cut e la successiva
+CUT_BURST_PROBABILITY = {
+    State.BUILD:  0.25,
+    State.GROOVE: 0.20,
+    State.DROP:   0.15,
+    State.PEAK:   0.15,
+    State.RELAX:  0.10,
+}
+
 # SOVRAPPOSIZIONE: "peek" verso l'altra scena, spinto al 40-60% di blend, mantenuto
 # li' per un tempo prolungato, poi tornato indietro (0%) alla scena di partenza.
 # Non e' un "hold" che completa verso il target: e' un'anteprima che poi si annulla.
@@ -204,7 +230,9 @@ class HybridCouplesModel:
         self.bass_history = deque(maxlen=30)  # Per calcolare trend energy
         self.last_bass = 0  # Ultimo valore bass live, per modulazione continua
         self.last_bass_avg = 0  # Ultima media bass, per calcolare la velocita' del break
+        self.last_energy_trend = 0  # bass - bass_avg dell'ultimo _update_state, per la raffica di cut
         self.recent_kick_peak_bass = 0  # Massimo kick visto nello stato corrente (per il lampo singolo GROOVE/BUILD)
+        self.last_cut_burst_time = 0  # Cooldown tra una raffica di cut e la successiva
 
         # Tracciamento uscita da BREAK: per estendere lo spazio di wave_kick
         # in BUILD/GROOVE durante una risalita rapida post-break
@@ -228,6 +256,8 @@ class HybridCouplesModel:
         self.burst_return_scene = None
         self.burst_return_is_a = True
         self.burst_transition_choice = "Taglio"
+        self.burst_alt_scene = STROBE_SCENE
+        self.burst_interval = STROBE_BURST_INTERVAL
         self.last_decision_kind = "normal"  # "normal" | "burst_step" | "burst_end" | "overlap_forward" | "overlap_reverse"
 
         # Sovrapposizione (peek + ritorno, non bloccante)
@@ -308,21 +338,31 @@ class HybridCouplesModel:
         self.last_shown_b_scene = self.current_b_scene
         return self.current_b_scene
 
-    def _trigger_strobe(self, current_scene, total_steps, return_scene=None, return_is_a=None):
-        """Predispone una raffica strobo/lampo (self.burst_active=True), pronta
+    def _trigger_strobe(self, current_scene, total_steps, return_scene=None, return_is_a=None,
+                         alt_scene=None, transition_choice=None, interval=None):
+        """Predispone una raffica strobo/lampo/cut (self.burst_active=True), pronta
         per essere avanzata da _advance_burst(). total_steps=2 (1 ON+1 OFF) per
-        un lampo singolo, STROBE_BURST_COUNT*2 per una raffica completa - stessa
-        macchina a stati in entrambi i casi, cambia solo la lunghezza.
+        un lampo singolo, STROBE_BURST_COUNT*2 per una raffica completa, CUT_BURST_STEPS
+        per una raffica di Tagli - stessa macchina a stati in tutti i casi, cambia
+        solo lunghezza/scena alternata/transizione.
 
         return_scene/return_is_a: override esplicito di dove atterrare dopo il
         burst/lampo (usato dal lampo in INTRO, che deve restare sulla stessa
         scena_A invece di saltare su una _B - li' il kick e' "assorbito", non
         genera un vero switch). Se assenti, usa la logica di default del
-        ciclo A/B normale."""
+        ciclo A/B normale.
+
+        alt_scene: scena alternata al posto di STROBE_SCENE (usato dalla raffica
+        di cut, che alterna verso l'altra scena della coppia invece di strobo_B).
+        transition_choice: forza la transizione invece di sceglierla random da
+        STROBE_TRANSITION_CHOICES (la raffica di cut vuole SEMPRE Taglio puro).
+        interval: secondi tra un frame e l'altro, default STROBE_BURST_INTERVAL."""
         self.burst_total_steps = total_steps
         self.burst_step = -1  # verra' incrementato a 0 dentro _advance_burst
         self.burst_back_scene = current_scene
-        self.burst_transition_choice = random.choice(STROBE_TRANSITION_CHOICES)
+        self.burst_transition_choice = transition_choice or random.choice(STROBE_TRANSITION_CHOICES)
+        self.burst_alt_scene = alt_scene or STROBE_SCENE
+        self.burst_interval = interval or STROBE_BURST_INTERVAL
         self.burst_active = True
 
         if return_scene is not None:
@@ -342,9 +382,9 @@ class HybridCouplesModel:
             self.burst_return_is_a = True
 
     def _advance_burst(self, current_time, current_scene, logger):
-        """Avanza di UN frame la raffica strobo attiva (assume self.burst_active == True).
+        """Avanza di UN frame la raffica strobo/cut attiva (assume self.burst_active == True).
 
-        Alterna strobo_B <-> scena di base per burst_total_steps frame, poi atterra
+        Alterna burst_alt_scene <-> scena di base per burst_total_steps frame, poi atterra
         sulla scena target (burst_return_scene) decisa al momento del trigger.
         """
         self.burst_step += 1
@@ -366,9 +406,9 @@ class HybridCouplesModel:
             )
             return self.burst_return_scene
 
-        self.burst_next_time = current_time + STROBE_BURST_INTERVAL
+        self.burst_next_time = current_time + self.burst_interval
         self.last_decision_kind = "burst_step"
-        target = STROBE_SCENE if (self.burst_step % 2 == 0) else self.burst_back_scene
+        target = self.burst_alt_scene if (self.burst_step % 2 == 0) else self.burst_back_scene
 
         log_decision(
             from_scene=current_scene,
@@ -469,6 +509,7 @@ class HybridCouplesModel:
         """
         energy = bass_avg
         energy_trend = bass - bass_avg if bass_avg > 0 else 0
+        self.last_energy_trend = energy_trend
 
         # Logica semplice: associa energia a stato
         if couple_elapsed < 30:
@@ -518,10 +559,20 @@ class HybridCouplesModel:
             return max(0.3, base * (1.0 - 0.7 * drop_factor))
         return base
 
+    def _get_fade_duration_ms(self):
+        """Durata del Fade reattiva all'energia live: corto/veloce se il bass
+        e' alto (la musica spinge), lungo se e' calmo - non la durata fissa
+        2000ms usata finora in INTRO e nel ritorno da wave_kick ("il fade
+        deve reagire in base alla musica: se spinge fade corti veloci, se
+        calma fade lunghi")."""
+        bass_factor = min(1.0, max(0.0, self.last_bass / 100.0))
+        min_ms, max_ms = FADE_DURATION_RANGE
+        return int(max_ms - bass_factor * (max_ms - min_ms))
+
     def _get_fade_ms(self):
         """Ritorna la durata di transizione usata per il display nei log"""
         if self.current_state in (State.INTRO, State.BREAK):
-            return 2000
+            return self._get_fade_duration_ms()
         return CYCLE_TRANSITION_DURATION_MS.get(self.current_state, 800)
 
     def _is_return_transition(self):
@@ -567,16 +618,18 @@ class HybridCouplesModel:
                 "kick_mode": "overlap"
             }
 
-        # Frame intermedio della raffica strobo: transizione scelta al trigger,
-        # durata legata all'intervallo del burst (niente pool/energia qui)
+        # Frame intermedio della raffica strobo/cut: transizione scelta al
+        # trigger, durata legata all'intervallo del burst (niente pool/energia qui)
         if self.last_decision_kind == "burst_step":
-            burst_duration_ms = int(STROBE_BURST_INTERVAL * 1000 * 0.7)
-            debug_log(f"[TRANS] STROBE frame: {self.burst_transition_choice} {burst_duration_ms}ms")
+            burst_duration_ms = int(self.burst_interval * 1000 * 0.7)
+            is_cut_burst = self.burst_alt_scene != STROBE_SCENE
+            kick_mode = "cutburst" if is_cut_burst else "strobe"
+            debug_log(f"[TRANS] {'CUT BURST' if is_cut_burst else 'STROBE'} frame: {self.burst_transition_choice} {burst_duration_ms}ms")
             return {
                 "type": self.burst_transition_choice,
                 "duration_ms": burst_duration_ms,
                 "is_return": False,
-                "kick_mode": "strobe"
+                "kick_mode": kick_mode
             }
 
         # Ritorno da wave_kick a _A: Fade (controllato PRIMA del check generico
@@ -584,10 +637,11 @@ class HybridCouplesModel:
         # generico venisse prima, intercetterebbe anche il ritorno, non solo l'entrata)
         if is_return and self.temp_b_scene == "wave_kick":
             self.temp_b_scene = None  # Reset temp override
-            debug_log(f"[TRANS] wave_kick -> A: Fade 2000ms")
+            fade_ms = self._get_fade_duration_ms()
+            debug_log(f"[TRANS] wave_kick -> A: Fade {fade_ms}ms")
             return {
                 "type": "Fade",
-                "duration_ms": 2000,
+                "duration_ms": fade_ms,
                 "is_return": True,
                 "kick_mode": "crescendo"
             }
@@ -605,7 +659,7 @@ class HybridCouplesModel:
             if random.random() < cut_prob:
                 trans_type, duration_ms = "Taglio", 300
             else:
-                trans_type, duration_ms = "Fade", 2000
+                trans_type, duration_ms = "Fade", self._get_fade_duration_ms()
             debug_log(f"[TRANS] BREAK reattivo: {trans_type} {duration_ms}ms (drop_rate={drop_rate:.1f}, cut_prob={cut_prob:.2f})")
             return {"type": trans_type, "duration_ms": duration_ms, "is_return": is_return}
 
@@ -616,8 +670,9 @@ class HybridCouplesModel:
             if random.random() < CUT_PROBABILITY_INTRO:
                 debug_log(f"[TRANS] INTRO: Taglio 200ms (cut)")
                 return {"type": "Taglio", "duration_ms": 200, "is_return": is_return}
-            debug_log(f"[TRANS] INTRO: Fade 2000ms")
-            return {"type": "Fade", "duration_ms": 2000, "is_return": is_return}
+            fade_ms = self._get_fade_duration_ms()
+            debug_log(f"[TRANS] INTRO: Fade {fade_ms}ms")
+            return {"type": "Fade", "duration_ms": fade_ms, "is_return": is_return}
 
         # Ciclo energetico principale: stessa pool random per A->B e B->A,
         # con Cut integrato a probabilita' crescente con l'energia (stato + bass live)
@@ -896,6 +951,21 @@ class HybridCouplesModel:
             burst_prob = STROBE_BURST_PROBABILITY.get(self.current_state, 0.0)
             if burst_prob > 0 and random.random() < burst_prob:
                 self._trigger_strobe(current_scene, STROBE_BURST_COUNT * 2)
+                return self._advance_burst(current_time, current_scene, logger)
+
+            # RAFFICA DI CUT: alterna rapidamente verso l'altra scena della
+            # coppia, tutta in Taglio puro - innescata su un vero "pull-back"
+            # (bass che scende bruscamente sotto la sua media recente, es. un
+            # riavvolgimento/piccola pausa), non sull'energia sostenuta in
+            # generale (gia' coperta da raffica strobo/lampo sopra/sotto).
+            cut_burst_prob = CUT_BURST_PROBABILITY.get(self.current_state, 0.0)
+            if (cut_burst_prob > 0 and self.last_energy_trend < CUT_BURST_TREND_THRESHOLD
+                    and (current_time - self.last_cut_burst_time) >= CUT_BURST_COOLDOWN
+                    and random.random() < cut_burst_prob):
+                self.last_cut_burst_time = current_time
+                alt_scene = self.current_b_scene if self.in_scene_a else self.current_couple_a
+                self._trigger_strobe(current_scene, CUT_BURST_STEPS, alt_scene=alt_scene,
+                                      transition_choice="Taglio", interval=CUT_BURST_INTERVAL)
                 return self._advance_burst(current_time, current_scene, logger)
 
             # LAMPO SINGOLO in GROOVE/BUILD: solo sul kick PIU' ALTO letto finora

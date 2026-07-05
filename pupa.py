@@ -298,6 +298,8 @@ def main():
                         print(f"[WAVE_KICK] ritorno a A -> {trans_type} {trans_ms}ms")
                     elif kick_mode == "strobe":
                         print(f"[STROBE] frame -> {trans_type} {trans_ms}ms")
+                    elif kick_mode == "cutburst":
+                        print(f"[CUT BURST] frame -> {trans_type} {trans_ms}ms")
                     elif kick_mode == "overlap":
                         print(f"[SOVRAPPOSIZIONE] -> {trans_type} {trans_ms}ms")
 
