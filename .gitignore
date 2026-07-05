@@ -7,5 +7,7 @@ __pycache__/
 logs/
 debug.log
 debug.log.*
+audio_levels.log
+audio_levels.log.*
 
 python-3.14.6-amd64.exe

@@ -10,11 +10,22 @@ import sounddevice as sd
 import numpy as np
 from collections import deque
 import threading
-from debug_logger import debug as debug_log
+import time
+from debug_logger import debug as debug_log, setup_debug_logger
+
+# Log dedicato, separato da debug.log: quello ruota ogni ~100KB/8min sotto il
+# traffico dei log di brain.py (TRANS/decisioni), troppo in fretta per
+# conservare i livelli audio di un intero live. File/rotazione piu' ampia,
+# pensata per coprire un'intera serata (~1MB/ora a 1 riga/5s).
+_level_logger = setup_debug_logger(
+    name="pupa_levels", log_file="audio_levels.log",
+    max_bytes=2_000_000, backup_count=5
+)
 
 
 class AudioAnalyzer:
     AGC_WARMUP_BLOCKS = 20  # ~1s a blocksize=2048/44100Hz
+    LEVEL_LOG_INTERVAL = 5.0  # secondi tra un log dei livelli e il successivo
 
     def __init__(self, device=8, channels=2, samplerate=44100, blocksize=2048):
         self.device = device
@@ -73,7 +84,13 @@ class AudioAnalyzer:
         # rumoroso blocco-a-blocco (a differenza di bass/mid/high che gia' usano
         # una media mobile su 30 campioni) e produceva una reattivita' "casuale".
         self.db_level = -60.0
-    
+
+        # Log periodico dei livelli grezzi (bass/mid/high normalizzati + tetto
+        # AGC), per poter verificare A POSTERIORI se il mix era saturato/
+        # schiacciato sul tetto (es. dopo un live), invece di doverlo dedurre
+        # indirettamente dalla distribuzione degli stati nei log delle decisioni.
+        self._last_level_log_time = 0.0
+
     def start(self):
         """Start audio capture stream"""
         self.running = True
@@ -157,6 +174,15 @@ class AudioAnalyzer:
 
             # Detect kick/drop/break
             self._detect_events()
+
+        now = time.time()
+        if now - self._last_level_log_time >= self.LEVEL_LOG_INTERVAL:
+            self._last_level_log_time = now
+            _level_logger.debug(
+                f"bass={bass_norm:.1f} mid={mid_norm:.1f} high={high_norm:.1f} "
+                f"dB={db_level:.1f} | tetto_agc bass={self.max_bass:.0f} mid={self.max_mid:.0f} "
+                f"high={self.max_high:.0f} | grezzo bass={bass_mag:.0f} mid={mid_mag:.0f} high={high_mag:.0f}"
+            )
     
     def _detect_events(self):
         """Rileva kick, drop, break"""
@@ -170,7 +196,6 @@ class AudioAnalyzer:
         
         # KICK: bass delta > 14
         bass_delta = current_bass - prev_bass
-        import time
         current_time = time.time() * 1000
         
         if (bass_delta > self.kick_threshold_bass_delta and 
