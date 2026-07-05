@@ -121,7 +121,16 @@ class OBSController:
                 except Exception as e2:
                     print(f"[OBS ERROR] Anche il fallback a Fade e' fallito: {e2}")
 
-        self.client.set_current_program_scene(scene_name)
+        try:
+            self.client.set_current_program_scene(scene_name)
+        except Exception as e:
+            # Non fatale: uno switch fallito (es. nome scena inesistente,
+            # scollegamento momentaneo da OBS) non deve mai far crashare
+            # l'intero processo durante un live - meglio saltare questo
+            # switch e continuare a reagire alla musica sul frame successivo.
+            print(f"[OBS ERROR] switch a '{scene_name}' fallito: {e}")
+            debug_log(f"[OBS] switch_scene fallito ({scene_name}): {e}")
+            return False
 
         self.current_scene = scene_name
         return True
