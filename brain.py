@@ -758,11 +758,28 @@ class HybridCouplesModel:
             )
             return self.overlap_base_scene
 
-        # TIMEOUT temp_b_scene (wave_kick max 20 secondi)
+        # TIMEOUT temp_b_scene (wave_kick max 20 secondi) - rete di sicurezza:
+        # forza il ritorno VERO ad A (non solo il reset del flag interno, che
+        # lasciava la scena bloccata su wave_kick a schermo mentre il codice
+        # pensava gia' di essere tornato ad A - causa del bug "wave_kick resta
+        # troppo durante un break lungo": nessun kick reale in un break
+        # silenzioso, il ritorno normale (sotto) non scattava mai).
         if self.temp_b_scene == "wave_kick" and self.temp_b_scene_time > 0 and (current_time - self.temp_b_scene_time) > 20:
-            debug_log(f"[TIMEOUT] wave_kick scaduto, reset")
+            debug_log(f"[TIMEOUT] wave_kick scaduto, ritorno forzato ad A")
             self.temp_b_scene = None
             self.temp_b_scene_time = 0
+            self.in_scene_a = True
+            self.last_transition_is_return = True
+            self.last_switch_time = current_time
+            log_decision(
+                from_scene=current_scene,
+                to_scene=self.current_couple_a,
+                reason="TIMEOUT wave_kick scaduto (20s)",
+                energy="TIMEOUT",
+                duration=self._get_fade_ms() / 1000,
+                logger=logger
+            )
+            return self.current_couple_a
 
         # AGGIORNA STATO MUSICALE
         prev_state = self.current_state
@@ -825,7 +842,14 @@ class HybridCouplesModel:
         # DROP/PEAK/RELAX mentre siamo ancora su wave_kick). Se questo controllo
         # dipendesse da wave_eligible, la permanenza minima verrebbe bypassata
         # in quel caso, facendo sparire wave_kick troppo in fretta.
-        if self.temp_b_scene == "wave_kick" and not self.in_scene_a and is_kick:
+        #
+        # In INTRO/BREAK valutato ad OGNI tick (non solo sui kick veri, stesso
+        # motivo dell'ENTRATA sotto): wave_kick e' concettualmente una scena_B
+        # (le scene_A restano sempre dominanti), quindi deve alternarsi con
+        # _A esattamente come farebbe una _B vera - un break lungo e silenzioso
+        # non ha kick reali per ore, e senza questo wave_kick restava bloccato
+        # a schermo ben oltre la permanenza minima, dominando invece di _A.
+        if self.temp_b_scene == "wave_kick" and not self.in_scene_a and (intro_or_break or is_kick):
             time_on_wave = current_time - self.temp_b_scene_time if self.temp_b_scene_time > 0 else 999
             if time_on_wave < MIN_WAVE_KICK_DWELL:
                 self.last_switch_time = current_time
