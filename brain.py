@@ -364,8 +364,19 @@ class HybridCouplesModel:
         return False
 
     def _update_state(self, bass, bass_avg, couple_elapsed, current_time):
-        """Aggiorna stato musicale basato su energia audio"""
-        energy = bass
+        """Aggiorna stato musicale basato su energia audio
+
+        Classifica sulla MEDIA (bass_avg, ~1.4s), non sul valore istantaneo:
+        su house/techno con basso quasi continuo, il singolo blocco FFT
+        (~46ms) cade quasi sempre vicino a un kick o alla sua coda, restando
+        strutturalmente alto anche nei passaggi piu' calmi - misurato dal
+        vivo su un liveset reale (Ling Ling, 7min, gain pulito/no clipping):
+        bass istantaneo 62.8-100 (media 92.6), MAI sotto 63, risultando in
+        PEAK/DROP quasi assoluti e zero GROOVE/RELAX/BREAK. energy_trend
+        resta sul confronto istante-vs-media (serve a intercettare un picco
+        sopra la media in corso, es. un vero drop).
+        """
+        energy = bass_avg
         energy_trend = bass - bass_avg if bass_avg > 0 else 0
 
         # Logica semplice: associa energia a stato
