@@ -238,6 +238,7 @@ class HybridCouplesModel:
         self.last_energy_trend = 0  # bass - bass_avg dell'ultimo _update_state, per la raffica di cut
         self.recent_kick_peak_bass = 0  # Massimo kick visto nello stato corrente (per il lampo singolo GROOVE/BUILD)
         self.last_cut_burst_time = 0  # Cooldown tra una raffica di cut e la successiva
+        self.in_pullback = False  # Per l'edge-trigger della raffica di cut (vedi sopra)
 
         # Tracciamento uscita da BREAK: per estendere lo spazio di wave_kick
         # in BUILD/GROOVE durante una risalita rapida post-break
@@ -947,6 +948,33 @@ class HybridCouplesModel:
                 return self.current_couple_a
             return None
 
+        # RAFFICA DI CUT: alterna rapidamente verso l'altra scena della coppia,
+        # tutta in Taglio puro - innescata su un vero "pull-back" (bass che
+        # scende bruscamente sotto la sua media recente, es. un
+        # riavvolgimento/piccola pausa). INDIPENDENTE da is_kick di proposito:
+        # un kick per definizione richiede il bass in SALITA (bass_delta > soglia),
+        # quasi incompatibile con un trend negativo sullo stesso istante -
+        # dentro "if is_kick" non scattava MAI (verificato dal vivo, zero
+        # pull-back rilevati in test reali). EDGE-TRIGGERED (self.in_pullback):
+        # valutata una sola volta all'INIZIO del calo, non ad ogni tick per
+        # tutta la sua durata (altrimenti a 20Hz un calo di anche solo 200ms
+        # ripeterebbe il dado 4 volte, alterando la probabilita' effettiva).
+        cut_burst_prob = CUT_BURST_PROBABILITY.get(self.current_state, 0.0)
+        is_pullback_now = self.last_energy_trend < CUT_BURST_TREND_THRESHOLD
+        if is_pullback_now and not self.in_pullback:
+            cooldown_ok = (current_time - self.last_cut_burst_time) >= CUT_BURST_COOLDOWN
+            debug_log(f"[CUTBURST] pull-back rilevato: trend={self.last_energy_trend:.1f} "
+                      f"state={self.current_state.value} cooldown_ok={cooldown_ok} prob={cut_burst_prob:.2f}")
+            if cut_burst_prob > 0 and cooldown_ok and random.random() < cut_burst_prob:
+                self.last_cut_burst_time = current_time
+                self.last_switch_time = current_time
+                alt_scene = self.current_b_scene if self.in_scene_a else self.current_couple_a
+                self._trigger_strobe(current_scene, CUT_BURST_STEPS, alt_scene=alt_scene,
+                                      transition_choice="Taglio", interval=CUT_BURST_INTERVAL)
+                self.in_pullback = is_pullback_now
+                return self._advance_burst(current_time, current_scene, logger)
+        self.in_pullback = is_pullback_now
+
         # KICK: A→B→A (ciclo energetico normale)
         if is_kick:
             self.last_switch_time = current_time
@@ -957,26 +985,6 @@ class HybridCouplesModel:
             if burst_prob > 0 and random.random() < burst_prob:
                 self._trigger_strobe(current_scene, STROBE_BURST_COUNT * 2)
                 return self._advance_burst(current_time, current_scene, logger)
-
-            # RAFFICA DI CUT: alterna rapidamente verso l'altra scena della
-            # coppia, tutta in Taglio puro - innescata su un vero "pull-back"
-            # (bass che scende bruscamente sotto la sua media recente, es. un
-            # riavvolgimento/piccola pausa), non sull'energia sostenuta in
-            # generale (gia' coperta da raffica strobo/lampo sopra/sotto).
-            cut_burst_prob = CUT_BURST_PROBABILITY.get(self.current_state, 0.0)
-            if cut_burst_prob > 0 and self.last_energy_trend < CUT_BURST_TREND_THRESHOLD:
-                # Diagnostico: se in futuro non scattano ancora raffiche di
-                # cut, questo dice se e' un problema di soglia (mai loggato)
-                # o di dado sfavorevole (loggato ma "skip dado").
-                cooldown_ok = (current_time - self.last_cut_burst_time) >= CUT_BURST_COOLDOWN
-                debug_log(f"[CUTBURST] pull-back rilevato: trend={self.last_energy_trend:.1f} "
-                          f"state={self.current_state.value} cooldown_ok={cooldown_ok}")
-                if cooldown_ok and random.random() < cut_burst_prob:
-                    self.last_cut_burst_time = current_time
-                    alt_scene = self.current_b_scene if self.in_scene_a else self.current_couple_a
-                    self._trigger_strobe(current_scene, CUT_BURST_STEPS, alt_scene=alt_scene,
-                                          transition_choice="Taglio", interval=CUT_BURST_INTERVAL)
-                    return self._advance_burst(current_time, current_scene, logger)
 
             # LAMPO SINGOLO in GROOVE/BUILD: solo sul kick PIU' ALTO letto finora
             # nello stato corrente (nuovo "massimo personale", non un kick
