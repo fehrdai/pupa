@@ -35,6 +35,34 @@ except ImportError:
 if PULSE_SOURCE:
     os.environ.setdefault("PULSE_SOURCE", PULSE_SOURCE)
 
+# AUDIO_INPUT_GAIN_PCT: opzionale, solo Linux/PipeWire - gain di cattura (%)
+# impostato ESPLICITAMENTE ad ogni avvio invece di fidarsi di un settaggio
+# di sistema che puo' non persistere (o essere alterato da altri). Scoperto
+# dal vivo: un gain lasciato a 130% (sopra l'unita') su un segnale gia' di
+# livello linea produceva clipping pesante (picco 2.6 su 1.0), che a valle
+# schiacciava bass/mid/high sempre al tetto indipendentemente dal brano.
+try:
+    from secrets_local import AUDIO_INPUT_GAIN_PCT
+except ImportError:
+    AUDIO_INPUT_GAIN_PCT = None
+
+
+def _set_capture_gain(pulse_source, gain_pct):
+    """Imposta il gain di cattura via pactl (PipeWire/PulseAudio). Non
+    fatale se fallisce (es. 'pactl' assente su Windows): logga solo un
+    warning, pupa continua con qualunque gain sia gia' impostato."""
+    import subprocess
+    try:
+        subprocess.run(
+            ["pactl", "set-source-volume", pulse_source, f"{gain_pct}%"],
+            check=True, capture_output=True, timeout=5
+        )
+        print(f"[AUDIO] Gain di cattura impostato a {gain_pct}% su '{pulse_source}'")
+    except FileNotFoundError:
+        print("[AUDIO] WARN: comando 'pactl' non trovato, gain di cattura NON impostato automaticamente")
+    except Exception as e:
+        print(f"[AUDIO] WARN: impossibile impostare il gain di cattura: {e}")
+
 CONFIG = {
     "obs_host": OBS_HOST,
     "obs_port": OBS_PORT,
@@ -168,6 +196,9 @@ def main():
     #     "strobo_B": 1,
     # }
 
+    if PULSE_SOURCE and AUDIO_INPUT_GAIN_PCT is not None:
+        _set_capture_gain(PULSE_SOURCE, AUDIO_INPUT_GAIN_PCT)
+
     audio_device = _resolve_audio_device(CONFIG["audio_device_name"])
     print(f"[AUDIO] Device '{CONFIG['audio_device_name']}' risolto a index {audio_device}")
 
@@ -181,7 +212,20 @@ def main():
         return
 
     print(f"[AUDIO] Device {audio_device} avviato")
-    
+
+    # PREFLIGHT: un paio di secondi per lasciar assestare l'AGC/lo stream,
+    # poi un controllo esplicito di picco - clipping o silenzio vanno
+    # segnalati SUBITO, prima di iniziare il set, non scoperti a posteriori.
+    time.sleep(2)
+    preflight = audio.get_metrics()
+    preflight_peak = preflight.get("peak", 0.0)
+    if preflight.get("clipping"):
+        print(f"[AUDIO] ALERT: segnale in CLIPPING gia' in preflight (picco={preflight_peak:.2f}) - abbassa il gain prima di iniziare")
+    elif preflight_peak < AudioAnalyzer.SILENCE_PEAK_THRESHOLD:
+        print(f"[AUDIO] ALERT: nessun segnale rilevato in preflight (picco={preflight_peak:.3f}) - verifica device/cavo/sorgente")
+    else:
+        print(f"[AUDIO] Preflight OK: picco={preflight_peak:.2f} (0.98+ = clipping)")
+
     current_scene = obs.get_current_scene()
     brain.initialize_model(current_scene, time.time())
     print(f"[BRAIN] Inizializzato su scena: {current_scene}")
@@ -200,17 +244,20 @@ def main():
                 is_kick = audio_data.get("is_kick", False)
                 is_drop = audio_data.get("is_drop", False)
                 db_level = audio_data.get("db_level", -60.0)
-                
+                clipping = audio_data.get("clipping", False)
+
                 bass_bar = "#" * int(bass / 5)
                 mid_bar = "#" * int(mid / 5)
                 hi_bar = "#" * int(hi / 5)
-                
+
                 event_label = ""
                 if is_kick:
                     event_label = " | KICK"
                 elif is_drop:
                     event_label = " | DROP"
-                
+                if clipping:
+                    event_label += " | CLIP!"
+
                 print(f"[AUDIO] B: [{bass_bar:<20}] M: [{mid_bar:<20}] H: [{hi_bar:<20}] dB:{db_level:6.1f}{event_label}")
 
                 # DECIDI SUBITO (ogni frame, senza delay)

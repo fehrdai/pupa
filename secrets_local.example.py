@@ -16,3 +16,13 @@ AUDIO_DEVICE_NAME = "Microsoft Sound Mapper - Input"
 # Opzionale, SOLO Linux/PipeWire: pinna la sorgente pulse a un device
 # specifico invece del default di sistema. Lascia commentato su Windows.
 # PULSE_SOURCE = "alsa_input.pci-0000_00_1b.0.analog-stereo"
+
+# Opzionale, SOLO Linux/PipeWire: gain di cattura (%) impostato via pactl ad
+# ogni avvio di pupa.py, invece di fidarsi di un settaggio di sistema che
+# potrebbe non persistere. Verifica il valore giusto con:
+#   pactl list sources | grep -A8 "<nome sorgente>"
+# 100% = 0dB (unita'). ATTENZIONE: valori sopra 100% possono causare
+# clipping pesante se il segnale in ingresso e' gia' di livello linea
+# (osservato dal vivo: 130% su un ingresso linea produceva un picco di 2.6
+# su una scala che clippa a 1.0).
+# AUDIO_INPUT_GAIN_PCT = 40

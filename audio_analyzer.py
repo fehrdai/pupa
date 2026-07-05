@@ -27,6 +27,17 @@ class AudioAnalyzer:
     AGC_WARMUP_BLOCKS = 20  # ~1s a blocksize=2048/44100Hz
     LEVEL_LOG_INTERVAL = 5.0  # secondi tra un log dei livelli e il successivo
 
+    # ALERT: gain di ingresso troppo alto (clipping) o segnale assente
+    # (device sbagliato/cavo scollegato/sorgente muta). Scoperto dal vivo:
+    # un gain di cattura troppo alto (130% su un ingresso Linux) produceva
+    # un segnale clippato che schiacciava bass/mid/high sempre al tetto,
+    # simulando "musica sempre al massimo" indipendentemente dal brano.
+    CLIP_PEAK_THRESHOLD = 0.98    # >= questo picco (1.0 = piena scala) = clipping
+    CLIP_ALERT_COOLDOWN = 10.0    # secondi minimi tra un alert di clipping e il successivo
+    SILENCE_PEAK_THRESHOLD = 0.01  # sotto questo picco il blocco e' considerato "silenzio"
+    SILENCE_ALERT_AFTER = 20.0    # secondi di silenzio continuo prima di allertare
+    SILENCE_ALERT_COOLDOWN = 30.0  # secondi minimi tra un alert di silenzio e il successivo
+
     def __init__(self, device=8, channels=2, samplerate=44100, blocksize=2048):
         self.device = device
         self.channels = channels
@@ -91,6 +102,13 @@ class AudioAnalyzer:
         # indirettamente dalla distribuzione degli stati nei log delle decisioni.
         self._last_level_log_time = 0.0
 
+        # Stato per gli alert di clipping/silenzio (vedi costanti sopra)
+        self._last_clip_alert_time = 0.0
+        self._last_signal_time = time.time()
+        self._last_silence_alert_time = 0.0
+        self.last_peak = 0.0
+        self.clipping = False
+
     def start(self):
         """Start audio capture stream"""
         self.running = True
@@ -122,6 +140,31 @@ class AudioAnalyzer:
             audio = np.mean(indata, axis=1)
         else:
             audio = indata.flatten()
+
+        now = time.time()
+
+        # ALERT: clipping (picco troppo vicino/oltre la piena scala) o
+        # silenzio prolungato (probabile device/sorgente sbagliati). Alert
+        # rate-limited per non spammare console/log durante un intero brano.
+        peak = float(np.max(np.abs(audio))) if len(audio) else 0.0
+        self.last_peak = peak
+        self.clipping = peak >= self.CLIP_PEAK_THRESHOLD
+
+        if self.clipping and (now - self._last_clip_alert_time) >= self.CLIP_ALERT_COOLDOWN:
+            self._last_clip_alert_time = now
+            msg = f"[ALERT] CLIPPING sul segnale in ingresso (picco={peak:.2f}, >=1.0 = distorsione) - abbassa il gain di ingresso"
+            print(msg)
+            _level_logger.warning(msg)
+
+        if peak >= self.SILENCE_PEAK_THRESHOLD:
+            self._last_signal_time = now
+        elif (now - self._last_signal_time) >= self.SILENCE_ALERT_AFTER and \
+                (now - self._last_silence_alert_time) >= self.SILENCE_ALERT_COOLDOWN:
+            self._last_silence_alert_time = now
+            msg = (f"[ALERT] SEGNALE ASSENTE da oltre {self.SILENCE_ALERT_AFTER:.0f}s "
+                   f"- controlla device/cavo/sorgente")
+            print(msg)
+            _level_logger.warning(msg)
 
         # Livello RMS in dBFS del blocco grezzo (0dB = piena scala), smoothed
         # via EMA per ridurre il rumore blocco-a-blocco (~46ms/blocco)
@@ -175,13 +218,13 @@ class AudioAnalyzer:
             # Detect kick/drop/break
             self._detect_events()
 
-        now = time.time()
         if now - self._last_level_log_time >= self.LEVEL_LOG_INTERVAL:
             self._last_level_log_time = now
             _level_logger.debug(
                 f"bass={bass_norm:.1f} mid={mid_norm:.1f} high={high_norm:.1f} "
-                f"dB={db_level:.1f} | tetto_agc bass={self.max_bass:.0f} mid={self.max_mid:.0f} "
-                f"high={self.max_high:.0f} | grezzo bass={bass_mag:.0f} mid={mid_mag:.0f} high={high_mag:.0f}"
+                f"dB={db_level:.1f} peak={peak:.3f} | tetto_agc bass={self.max_bass:.0f} "
+                f"mid={self.max_mid:.0f} high={self.max_high:.0f} | grezzo bass={bass_mag:.0f} "
+                f"mid={mid_mag:.0f} high={high_mag:.0f}"
             )
     
     def _detect_events(self):
@@ -230,6 +273,7 @@ class AudioAnalyzer:
                     "bass": 0, "mid": 0, "high": 0,
                     "is_kick": False, "is_drop": False, "is_break": False,
                     "db_level": self.db_level,
+                    "peak": self.last_peak, "clipping": self.clipping,
                 }
 
             return {
@@ -243,4 +287,6 @@ class AudioAnalyzer:
                 "is_drop": self.is_drop,
                 "is_break": self.is_break,
                 "db_level": self.db_level,
+                "peak": self.last_peak,
+                "clipping": self.clipping,
             }
