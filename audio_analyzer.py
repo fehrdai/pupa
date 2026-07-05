@@ -24,7 +24,17 @@ _level_logger = setup_debug_logger(
 
 
 class AudioAnalyzer:
-    AGC_WARMUP_BLOCKS = 20  # ~1s a blocksize=2048/44100Hz
+    # AGC: inseguitore di picco (attacco rapido, rilascio lento), non una EMA
+    # simmetrica. Misurato dal vivo su un liveset reale pulito (no clipping,
+    # gain corretto): con lo stesso alpha in salita e discesa il tetto
+    # convergeva verso la MEDIA di bass_mag, non il picco - per costruzione
+    # circa meta' dei valori la superano e vengono tagliati al 100%
+    # (mediana bass_norm osservata: 100.0, su 84 campioni/7min). ATTACK
+    # basso = sale in fretta per inseguire un nuovo picco; RELEASE alto =
+    # scende lentamente, cosi' il tetto non collassa subito dopo un picco
+    # ne' durante un calo breve.
+    AGC_ATTACK = 0.3
+    AGC_RELEASE = 0.9995
     LEVEL_LOG_INTERVAL = 5.0  # secondi tra un log dei livelli e il successivo
 
     # ALERT: gain di ingresso troppo alto (clipping) o segnale assente
@@ -77,17 +87,10 @@ class AudioAnalyzer:
         self.is_drop = False
         self.is_break = False
         
-        # AGC (Automatic Gain Control)
+        # AGC (Automatic Gain Control) - vedi _update_agc_ceiling()
         self.max_bass = 1.0
         self.max_mid = 1.0
         self.max_high = 1.0
-        # Warm-up: il tetto AGC a regime (alpha=0.9995) impiega ~93s a
-        # raggiungere il livello reale partendo da 1.0 - per quella finestra
-        # bass/mid/high restano tagliati al 100% (nessun kick rilevabile,
-        # zero dinamica visibile). Primi AGC_WARMUP_BLOCKS blocchi (~1s)
-        # usano un adattamento veloce per "scaldare" subito il tetto, poi si
-        # torna al ritmo lento gia' testato a regime.
-        self._agc_block_count = 0
 
         # Livello audio in dBFS (RMS del segnale grezzo, non filtrato per banda),
         # per replicare la logica soglia/tetto del vecchio plugin "Scale to Sound".
@@ -189,16 +192,10 @@ class AudioAnalyzer:
         mid_mag = np.mean(magnitude[mid_idx]) if len(mid_idx) > 0 else 0
         high_mag = np.mean(magnitude[high_idx]) if len(high_idx) > 0 else 0
         
-        # AGC: adatta dinamicamente. Primi blocchi (~1s): alpha veloce per
-        # scaldare subito il tetto partendo da 1.0, poi ritmo lento originale.
-        self._agc_block_count += 1
-        if self._agc_block_count <= self.AGC_WARMUP_BLOCKS:
-            alpha = 0.7
-        else:
-            alpha = 0.9995
-        self.max_bass = self.max_bass * alpha + bass_mag * (1 - alpha)
-        self.max_mid = self.max_mid * alpha + mid_mag * (1 - alpha)
-        self.max_high = self.max_high * alpha + high_mag * (1 - alpha)
+        # AGC: inseguitore di picco (vedi _update_agc_ceiling)
+        self.max_bass = self._update_agc_ceiling(self.max_bass, bass_mag)
+        self.max_mid = self._update_agc_ceiling(self.max_mid, mid_mag)
+        self.max_high = self._update_agc_ceiling(self.max_high, high_mag)
         
         # Normalizza 0-100
         bass_norm = (bass_mag / max(self.max_bass, 0.001)) * 100
@@ -227,6 +224,15 @@ class AudioAnalyzer:
                 f"mid={mid_mag:.0f} high={high_mag:.0f}"
             )
     
+    def _update_agc_ceiling(self, ceiling, mag):
+        """Inseguitore di picco: attacco rapido se mag supera il tetto
+        attuale (insegue subito un nuovo picco, anche a freddo da 1.0),
+        rilascio lento altrimenti (il tetto non collassa dopo un picco ne'
+        durante un calo breve). Vedi commento su AGC_ATTACK/AGC_RELEASE."""
+        if mag > ceiling:
+            return ceiling * self.AGC_ATTACK + mag * (1 - self.AGC_ATTACK)
+        return ceiling * self.AGC_RELEASE + mag * (1 - self.AGC_RELEASE)
+
     def _detect_events(self):
         """Rileva kick, drop, break"""
         if len(self.bass_history) < 2:
