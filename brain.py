@@ -232,7 +232,7 @@ class HybridCouplesModel:
         # STATE MACHINE
         self.current_state = State.INTRO
         self.state_start_time = 0
-        self.bass_history = deque(maxlen=30)  # Per calcolare trend energy
+        self.energy_history = deque(maxlen=900)  # ~45s a 20Hz, per le soglie adattive (vedi _adaptive_thresholds)
         self.last_bass = 0  # Ultimo valore bass live, per modulazione continua
         self.last_bass_avg = 0  # Ultima media bass, per calcolare la velocita' del break
         self.last_energy_trend = 0  # bass - bass_avg dell'ultimo _update_state, per la raffica di cut
@@ -500,6 +500,42 @@ class HybridCouplesModel:
             return 0 <= elapsed <= POST_BREAK_RECOVERY_WINDOW
         return False
 
+    def _adaptive_thresholds(self):
+        """Soglie di stato come PERCENTILI della dinamica recente (~45s),
+        invece di valori assoluti fissi. Le soglie fisse erano tarate su un
+        liveset techno/tech house denso - con un genere diverso e piu' lento
+        (es. dub techno) l'energia non arriva mai a superarle, restando
+        bloccati tra INTRO/RELAX/BREAK indipendentemente da come si muove
+        davvero il brano. Con i percentili, la macchina a stati si
+        ri-calibra da sola sul range REALE di qualunque cosa stia suonando,
+        denso o sparso, veloce o lento.
+
+        Fallback a soglie fisse ragionevoli finche' non c'e' abbastanza
+        storia accumulata (es. appena avviato)."""
+        if len(self.energy_history) < 60:
+            return {"peak": 85, "build": 70, "groove": 50, "break": 20}
+
+        sorted_hist = sorted(self.energy_history)
+        n = len(sorted_hist)
+
+        def pct(p):
+            idx = min(n - 1, max(0, int(n * p)))
+            return sorted_hist[idx]
+
+        peak = pct(0.90)
+        build = pct(0.70)
+        groove = pct(0.45)
+        break_th = pct(0.12)
+
+        # Distacco minimo tra soglie: con poca varianza (es. un drone quasi
+        # costante) i percentili potrebbero collassare vicini, facendo
+        # oscillare lo stato per fluttuazioni minime
+        build = min(build, peak - 3)
+        groove = min(groove, build - 3)
+        break_th = min(break_th, groove - 3)
+
+        return {"peak": peak, "build": build, "groove": groove, "break": break_th}
+
     def _update_state(self, bass, bass_avg, couple_elapsed, current_time):
         """Aggiorna stato musicale basato su energia audio
 
@@ -512,23 +548,30 @@ class HybridCouplesModel:
         PEAK/DROP quasi assoluti e zero GROOVE/RELAX/BREAK. energy_trend
         resta sul confronto istante-vs-media (serve a intercettare un picco
         sopra la media in corso, es. un vero drop).
+
+        Soglie ADATTIVE (vedi _adaptive_thresholds): calcolate sui percentili
+        della dinamica recente, non piu' fisse - si adattano al genere in
+        riproduzione invece di essere tarate una volta per tutte.
         """
         energy = bass_avg
         energy_trend = bass - bass_avg if bass_avg > 0 else 0
         self.last_energy_trend = energy_trend
+        self.energy_history.append(energy)
 
-        # Logica semplice: associa energia a stato
+        th = self._adaptive_thresholds()
+
+        # Logica: associa energia a stato secondo le soglie adattive correnti
         if couple_elapsed < 30:
             new_state = State.INTRO
-        elif energy > 80 and energy_trend > 10:
+        elif energy > th["build"] and energy_trend > 10:
             new_state = State.DROP
-        elif energy > 85:
+        elif energy > th["peak"]:
             new_state = State.PEAK
-        elif energy > 70:
+        elif energy > th["build"]:
             new_state = State.BUILD
-        elif energy > 50:
+        elif energy > th["groove"]:
             new_state = State.GROOVE
-        elif energy < 20:
+        elif energy < th["break"]:
             new_state = State.BREAK
         else:
             new_state = State.RELAX
@@ -781,9 +824,8 @@ class HybridCouplesModel:
             )
             return self.current_couple_a
 
-        # AGGIORNA STATO MUSICALE
+        # AGGIORNA STATO MUSICALE (energy_history alimentato dentro _update_state)
         prev_state = self.current_state
-        self.bass_history.append(bass)
         self._update_state(bass, bass_avg, couple_elapsed, current_time)
 
         # Rileva uscita da BREAK: serve per estendere lo spazio di wave_kick
