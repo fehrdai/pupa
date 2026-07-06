@@ -65,6 +65,21 @@ COUPLE_TRANSITIONS = {
     "segnali_A": ["Burn", "Displace"],
 }
 
+# Transizioni PREVALENTI per stato (non univoche): invece di scegliere 50/50
+# tra le 2 transizioni del pool di ogni coppia, si pesa verso quella piu'
+# "intensa" (Displace > Burn > Blur) o quella piu' calma a seconda dello
+# stato corrente. Mantiene la personalizzazione per coppia (i pool sopra
+# restano quelli), aggiunge solo un carattere riconoscibile per stato senza
+# diventare meccanico/prevedibile (mai il 100%, sempre un po' di varieta').
+TRANSITION_INTENSITY_RANK = {"Displace": 3, "Burn": 2, "Blur": 1}
+TRANSITION_INTENSITY_PROBABILITY = {
+    State.BUILD:  0.65,  # tensione in crescita -> pende verso il piu' dinamico
+    State.GROOVE: 0.55,  # ritmo stabile -> leggero sbilanciamento dinamico
+    State.DROP:   0.80,  # massima energia -> quasi sempre il piu' dinamico
+    State.PEAK:   0.75,  # apice -> molto dinamico (il resto lo fa gia' il Cut alto)
+    State.RELAX:  0.25,  # discesa -> pende verso il piu' calmo
+}
+
 # Durata (ms) del ciclo energetico A<->B per stato: scala col crescendo musicale,
 # con un floor implicito (mai sotto ~150ms) per restare visibile.
 CYCLE_TRANSITION_DURATION_MS = {
@@ -608,6 +623,19 @@ class HybridCouplesModel:
             return max(0.3, base * (1.0 - 0.7 * drop_factor))
         return base
 
+    def _weighted_couple_transition(self, couple_pool):
+        """Sceglie tra le 2 transizioni del pool della coppia corrente,
+        pesando verso quella piu' "intensa" (Displace > Burn > Blur) o
+        quella piu' calma a seconda dello stato corrente - non piu' 50/50
+        uniforme. Mai il 100%: resta sempre un po' di varieta', solo con
+        un carattere prevalente riconoscibile per stato."""
+        if len(couple_pool) < 2:
+            return couple_pool[0] if couple_pool else "Burn"
+        ranked = sorted(couple_pool, key=lambda t: TRANSITION_INTENSITY_RANK.get(t, 0), reverse=True)
+        high, low = ranked[0], ranked[-1]
+        prob_high = TRANSITION_INTENSITY_PROBABILITY.get(self.current_state, 0.5)
+        return high if random.random() < prob_high else low
+
     def _get_fade_duration_ms(self):
         """Durata del Fade reattiva all'energia live: corto/veloce se il bass
         e' alto (la musica spinge), lungo se e' calmo - non la durata fissa
@@ -738,7 +766,7 @@ class HybridCouplesModel:
         if random.random() < cut_prob:
             trans_type = "Taglio"
         else:
-            trans_type = random.choice(couple_pool)
+            trans_type = self._weighted_couple_transition(couple_pool)
 
         direction = "B->A" if is_return else "A->B"
         debug_log(f"[TRANS] {direction} ciclo {self.current_couple_a}: {trans_type} {duration}ms "
