@@ -88,6 +88,12 @@ def _resolve_audio_device(name):
 
 TRANSITION_MS = 2500
 
+# SPERIMENTALE (2026-07-06): scene alternative a wave_kick, per vedere se
+# stanno bene alternate in modo randomico nel ciclo INTRO/BREAK. "ago_talk"
+# e' la cattura finestra del terminale che esegue pupa.py stesso.
+WAVE_KICK_ALT_SCENES = ["ago_talk"]
+WAVE_KICK_ALT_PROBABILITY = 0.3  # 30% delle volte al posto di wave_kick
+
 # ============================================================================
 # SCALE-TO-SOUND — DISATTIVATO DI NUOVO (2026-07-06)
 # ============================================================================
@@ -292,8 +298,17 @@ def main():
                     is_return = trans_info.get("is_return", False)
                     kick_mode = trans_info.get("kick_mode", "")
 
+                    # SPERIMENTALE: ogni tanto, al posto di wave_kick, mostra
+                    # una scena alternativa (es. "ago_talk") - per vedere se
+                    # ci sta bene nel ciclo. Sostituzione solo qui (la scena
+                    # OBS effettiva), la logica interna di brain.py resta
+                    # invariata (pensa sempre "wave_kick" per dwell/timeout/
+                    # transizioni) - facile da togliere se non convince.
+                    if kick_mode == "wave" and WAVE_KICK_ALT_SCENES and random.random() < WAVE_KICK_ALT_PROBABILITY:
+                        next_scene = random.choice(WAVE_KICK_ALT_SCENES)
+
                     if kick_mode == "wave":
-                        print(f"[WAVE_KICK] entrata -> {trans_type} {trans_ms}ms")
+                        print(f"[WAVE_KICK] entrata -> {trans_type} {trans_ms}ms ({next_scene})")
                     elif kick_mode == "crescendo":
                         print(f"[WAVE_KICK] ritorno a A -> {trans_type} {trans_ms}ms")
                     elif kick_mode == "strobe":
