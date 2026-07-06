@@ -304,7 +304,13 @@ def main():
                     # OBS effettiva), la logica interna di brain.py resta
                     # invariata (pensa sempre "wave_kick" per dwell/timeout/
                     # transizioni) - facile da togliere se non convince.
-                    if kick_mode == "wave" and WAVE_KICK_ALT_SCENES and random.random() < WAVE_KICK_ALT_PROBABILITY:
+                    #
+                    # Basato su next_scene (non su kick_mode=="wave"): molti
+                    # ingressi in wave_kick arrivano anche via SOVRAPPOSIZIONE
+                    # (kick_mode="overlap"), che kick_mode=="wave" da solo non
+                    # intercettava - osservato dal vivo (solo 2/20 sostituiti
+                    # invece del ~30% atteso).
+                    if next_scene == "wave_kick" and WAVE_KICK_ALT_SCENES and random.random() < WAVE_KICK_ALT_PROBABILITY:
                         next_scene = random.choice(WAVE_KICK_ALT_SCENES)
 
                     if kick_mode == "wave":
