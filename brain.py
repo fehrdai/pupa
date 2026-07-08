@@ -11,10 +11,16 @@ PUPA Brain Module - v0.6 Unified Energy-Reactive Model
 
 import random
 import time
+import os
 from collections import deque
 from enum import Enum
 from logger import log_decision
 from debug_logger import debug as debug_log
+
+try:
+    import yaml
+except ImportError:
+    yaml = None
 
 class State(Enum):
     """7 stati della macchina musicale"""
@@ -26,14 +32,11 @@ class State(Enum):
     PEAK = "peak"          # Apice, A+B overlay
     RELAX = "relax"        # Discesa post-peak
 
-# COUPLES: ogni _A ha un POOL di possibili _B (non un abbinamento fisso 1:1).
-# Ripristinato dal design originale v0.4 (COUPLES_CONFIG.yaml, "b_pool" per
-# coppia, curato per tema/atmosfera: es. "Urban/Cyber", "Psicodelic"...).
-# "projectx_B" rimosso su richiesta esplicita. Pool ridotti da 3 a 2 opzioni
-# per coppia (la variet' con 3 risultava eccessiva secondo l'utente),
-# scegliendo le rimozioni anche per ridurre la sovrapposizione tra coppie
-# diverse (es. urbanfree_A e kusanagi_A condividevano 2 scene su 3).
-COUPLES = {
+# Fallback hardcoded, usato se scenes_config.yaml manca/e' invalido - vedi
+# _load_scenes_config() sotto. Storicamente questi erano gli UNICI valori
+# possibili (COUPLES_CONFIG.yaml esisteva ma non era mai stato caricato,
+# vedi CLAUDE.md); ora sono anche il fallback di sicurezza del file YAML.
+_DEFAULT_COUPLES = {
     "urbanfree_A":   ["spectrumbar_B", "tunnelwave_B"],
     "psicodance_A":  ["stormlightning_B", "waveform1_B"],
     "montezuma_A":   ["roundedbar_B", "waveform2_B"],
@@ -42,6 +45,54 @@ COUPLES = {
     "futureflash_A": ["roundedbar_B", "waveform2_B"],
     "segnali_A":     ["spectrumbar_B", "ring_B"],
 }
+_DEFAULT_COUPLE_TRANSITIONS = {
+    "urbanfree_A": ["Blur", "Displace"],
+    "psicodance_A": ["Displace", "Burn"],
+    "montezuma_A": ["Burn", "Blur"],
+    "kusanagi_A": ["Burn", "Blur"],
+    "mri_A": ["Displace", "Blur"],
+    "futureflash_A": ["Burn", "Displace"],
+    "segnali_A": ["Burn", "Displace"],
+}
+_DEFAULT_SPECIAL_SCENES = {"wave_kick": "wave_kick", "strobo": "strobo_B"}
+
+SCENES_CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scenes_config.yaml")
+
+
+def _load_scenes_config(path=SCENES_CONFIG_PATH):
+    """Carica coppie/transizioni/scene speciali da scenes_config.yaml.
+    Fallback ai valori hardcoded sopra se il file manca, e' invalido, o
+    pyyaml non e' installato - nessuna rottura per chi non lo tocca."""
+    if yaml is None:
+        debug_log("[CONFIG] pyyaml non disponibile, uso valori hardcoded")
+        return dict(_DEFAULT_COUPLES), dict(_DEFAULT_COUPLE_TRANSITIONS), dict(_DEFAULT_SPECIAL_SCENES)
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+        couples = data.get("couples") or _DEFAULT_COUPLES
+        transitions = data.get("couple_transitions") or _DEFAULT_COUPLE_TRANSITIONS
+        special = data.get("special_scenes") or _DEFAULT_SPECIAL_SCENES
+        debug_log(f"[CONFIG] scenes_config.yaml caricato: {len(couples)} coppie")
+        return couples, transitions, special
+    except FileNotFoundError:
+        debug_log(f"[CONFIG] {path} non trovato, uso valori hardcoded")
+        return dict(_DEFAULT_COUPLES), dict(_DEFAULT_COUPLE_TRANSITIONS), dict(_DEFAULT_SPECIAL_SCENES)
+    except Exception as e:
+        debug_log(f"[CONFIG] {path} invalido ({e}), uso valori hardcoded")
+        return dict(_DEFAULT_COUPLES), dict(_DEFAULT_COUPLE_TRANSITIONS), dict(_DEFAULT_SPECIAL_SCENES)
+
+
+# COUPLES: ogni _A ha un POOL di possibili _B (non un abbinamento fisso 1:1).
+# Caricato da scenes_config.yaml (vedi _load_scenes_config), con fallback
+# hardcoded. Filtrato poi da validate_scenes() contro le scene REALMENTE
+# presenti in OBS - vedi sotto.
+COUPLES, COUPLE_TRANSITIONS, SPECIAL_SCENES = _load_scenes_config()
+
+# True se dopo validate_scenes() resta una sola scena in tutto (nessun vero
+# A/B possibile) - decide_next_scene() allora lampeggia sulla stessa scena
+# invece di alternare, vedi in fondo al file.
+DEGENERATE_MODE = False
+DEGENERATE_SCENE = None
 
 # META-COPPIE tra scene_A: la rotazione libera tra tutte e 7 le scene_A ad
 # ogni cambio COUPLE_DURATION (4min) risultava troppo veloce ("la rotazione
@@ -51,19 +102,11 @@ COUPLES = {
 # COUPLE_DURATION come prima), poi si passa a una nuova coppia di scene_A.
 META_COUPLE_DURATION = 1200  # ~20 minuti
 
-# Pool di transizioni "di coppia" per il ciclo energetico A<->B.
-# STESSA pool usata per ENTRAMBE le direzioni (A->B e B->A), scelta randomica.
-# Fade escluso di proposito: riservato alla fase INTRO/BREAK e al ritorno da wave_kick,
-# per evitare che domini percettivamente il ciclo principale (problema gia' riscontrato).
-COUPLE_TRANSITIONS = {
-    "urbanfree_A": ["Blur", "Displace"],
-    "psicodance_A": ["Displace", "Burn"],
-    "montezuma_A": ["Burn", "Blur"],
-    "kusanagi_A": ["Burn", "Blur"],
-    "mri_A": ["Displace", "Blur"],
-    "futureflash_A": ["Burn", "Displace"],
-    "segnali_A": ["Burn", "Displace"],
-}
+# Pool di transizioni "di coppia" per il ciclo energetico A<->B (COUPLE_TRANSITIONS,
+# caricato sopra da scenes_config.yaml). STESSA pool usata per ENTRAMBE le
+# direzioni (A->B e B->A), scelta randomica. Fade escluso di proposito:
+# riservato alla fase INTRO/BREAK e al ritorno da wave_kick, per evitare che
+# domini percettivamente il ciclo principale (problema gia' riscontrato).
 
 # Transizioni PREVALENTI per stato (non univoche): invece di scegliere 50/50
 # tra le 2 transizioni del pool di ogni coppia, si pesa verso quella piu'
@@ -129,7 +172,7 @@ PROB_ENTER_B_ON_KICK = 0.4
 # poi atterra sulla scena target normale. Implementata come piccola macchina a stati
 # che avanza di UN frame per ogni chiamata a decide_next_scene() (NON bloccante:
 # niente time.sleep, il loop a 20Hz continua a girare libero tra un frame e l'altro).
-STROBE_SCENE = "strobo_B"
+STROBE_SCENE = SPECIAL_SCENES.get("strobo", "strobo_B")
 STROBE_BURST_COUNT = 4          # numero di flash (ON+OFF) per raffica
 STROBE_BURST_INTERVAL = 0.10    # secondi tra un frame e l'altro della raffica
 STROBE_BURST_PROBABILITY = {
@@ -311,8 +354,16 @@ class HybridCouplesModel:
     def _select_new_meta_pair(self):
         """Sceglie una nuova coppia randomica di 2 scene_A (vedi
         META_COUPLE_DURATION): per i prossimi ~20 minuti _select_new_couple()
-        attinge solo da queste 2, invece che liberamente da tutte e 7."""
+        attinge solo da queste 2, invece che liberamente da tutte e 7.
+
+        Se dopo validate_scenes() sopravvive 1 sola coppia (non 0 - quel
+        caso e' DEGENERATE_MODE, gestito altrove - solo insufficiente per
+        un pair di 2), niente random.sample: resta l'unica disponibile."""
         all_a = list(COUPLES.keys())
+        if len(all_a) <= 2:
+            self.current_meta_pair = list(all_a)
+            self.meta_pair_history.append(tuple(sorted(all_a)))
+            return self.current_meta_pair
         for _ in range(10):
             pair = tuple(sorted(random.sample(all_a, 2)))
             if pair not in self.meta_pair_history:
@@ -676,6 +727,14 @@ class HybridCouplesModel:
         """
         is_return = self._is_return_transition()
 
+        # MODALITA' DEGENERATA: lampeggio sulla stessa scena (vedi
+        # validate_scenes/decide_next_scene) - pupa.py intercetta
+        # kick_mode="flash_single" e chiama obs.flash_scene() invece di
+        # un vero switch_scene (che sarebbe un no-op, stessa scena).
+        if self.last_decision_kind == "flash_single":
+            debug_log("[TRANS] MODALITA' DEGENERATA: lampeggio")
+            return {"type": "Taglio", "duration_ms": 100, "is_return": False, "kick_mode": "flash_single"}
+
         # Sovrapposizione: leg di andata (peek) o di ritorno (base)
         if self.last_decision_kind == "overlap_forward":
             debug_log(f"[TRANS] SOVRAPPOSIZIONE peek: {self.overlap_transition_choice} {self.overlap_forward_duration_ms}ms")
@@ -801,6 +860,18 @@ class HybridCouplesModel:
 
         # Default: nessun "kind" speciale finche' non impostato da un branch specifico
         self.last_decision_kind = "normal"
+
+        # MODALITA' DEGENERATA (vedi validate_scenes): con una sola scena
+        # disponibile in OBS (o nessuna coppia configurata sopravvissuta alla
+        # validazione) non esiste un vero A/B da alternare - lampeggia sulla
+        # stessa scena ad ogni kick invece di girare tutta la logica normale,
+        # che non avrebbe senso senza scene_B/coppie reali.
+        if DEGENERATE_MODE:
+            if is_kick and (current_time - self.last_switch_time) >= 0.15:
+                self.last_switch_time = current_time
+                self.last_decision_kind = "flash_single"
+                return current_scene
+            return None
 
         # RAFFICA STROBO IN CORSO: priorita' assoluta, avanza un frame per tick
         # col proprio intervallo (non il debounce generico dello stato corrente)
@@ -1159,3 +1230,73 @@ def get_transition_info():
 
 def initialize_model(current_scene, current_time):
     model.initialize(current_scene, current_time)
+
+
+_UNIVERSAL_FALLBACK_TRANSITIONS = ["Cut", "Taglio", "Fade", "Dissolvenza"]
+
+
+def _find_fallback_transition(available_transitions):
+    """Transizione di ripiego per un pool che resta vuoto dopo la
+    validazione - Cut/Fade sono nativi OBS, presenti in QUALUNQUE
+    installazione fresca (a differenza di Burn/Displace/Blur, che
+    richiedono Shadertastic). Prova nomi sia inglesi sia italiani, visto
+    che il nome e' localizzato e non c'e' un ID stabile via WebSocket."""
+    for name in _UNIVERSAL_FALLBACK_TRANSITIONS:
+        if name in available_transitions:
+            return name
+    return available_transitions[0] if available_transitions else "Fade"
+
+
+def validate_scenes(available_scenes, available_transitions):
+    """Filtra COUPLES/COUPLE_TRANSITIONS contro le scene/transizioni
+    REALMENTE presenti in OBS. Va chiamata da pupa.py subito dopo la
+    connessione (prima di initialize_model).
+
+    - Scene_A non trovate in OBS: la coppia intera viene rimossa
+    - Scene_B mancanti: tolte dal pool della coppia (la coppia resta se ne
+      sopravvive almeno una)
+    - Transizioni mancanti nel pool di una coppia: sostituite con un
+      fallback nativo OBS (Cut/Fade)
+    - Se alla fine non sopravvive nessuna coppia, o resta una sola scena in
+      tutto: attiva DEGENERATE_MODE (vedi decide_next_scene), pupa lampeggia
+      sulla stessa scena invece di alternare A/B.
+    """
+    global COUPLES, COUPLE_TRANSITIONS, DEGENERATE_MODE
+
+    available_scenes_set = set(available_scenes)
+    available_transitions = list(available_transitions)
+    fallback_trans = _find_fallback_transition(available_transitions)
+
+    filtered_couples = {}
+    filtered_transitions = {}
+    for a_scene, b_pool in COUPLES.items():
+        if a_scene not in available_scenes_set:
+            debug_log(f"[VALIDATE] {a_scene} non trovata in OBS, coppia rimossa")
+            continue
+        available_b = [b for b in b_pool if b in available_scenes_set]
+        if not available_b:
+            debug_log(f"[VALIDATE] {a_scene}: nessuna scena_B disponibile nel pool {b_pool}, coppia rimossa")
+            continue
+        if len(available_b) < len(b_pool):
+            debug_log(f"[VALIDATE] {a_scene}: pool_B ridotto a {available_b} (mancava/mancavano {set(b_pool) - set(available_b)})")
+        filtered_couples[a_scene] = available_b
+
+        trans_pool = COUPLE_TRANSITIONS.get(a_scene, [])
+        available_trans = [t for t in trans_pool if t in available_transitions]
+        if not available_trans:
+            debug_log(f"[VALIDATE] {a_scene}: nessuna transizione del pool {trans_pool} disponibile, fallback a '{fallback_trans}'")
+            available_trans = [fallback_trans]
+        filtered_transitions[a_scene] = available_trans
+
+    COUPLES = filtered_couples
+    COUPLE_TRANSITIONS = filtered_transitions
+
+    if not COUPLES or len(available_scenes_set) <= 1:
+        DEGENERATE_MODE = True
+        debug_log(f"[VALIDATE] MODALITA' DEGENERATA: {len(available_scenes_set)} scena/e OBS, "
+                  f"{len(COUPLES)} coppie valide - lampeggio invece di alternare A/B")
+    else:
+        DEGENERATE_MODE = False
+        debug_log(f"[VALIDATE] {len(COUPLES)} coppie valide su {len(available_scenes_set)} scene OBS")
+
+    return {"couples": COUPLES, "couple_transitions": COUPLE_TRANSITIONS, "degenerate": DEGENERATE_MODE}

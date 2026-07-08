@@ -139,6 +139,50 @@ class OBSController:
         """Return list of all cached scene names"""
         return list(self.scenes.keys())
 
+    def get_transition_list(self):
+        """Lista dei nomi di transizione REALMENTE registrati in questa
+        installazione OBS - dipende da lingua e plugin installati (es.
+        Shadertastic per Burn/Displace/Blur). Usata da validate_scenes() in
+        brain.py per adattare la configurazione a cosa esiste davvero."""
+        try:
+            resp = self.client.get_scene_transition_list()
+            names = []
+            for t in resp.transitions:
+                if isinstance(t, dict):
+                    names.append(t.get('transitionName'))
+                else:
+                    names.append(getattr(t, 'transition_name', None))
+            return [n for n in names if n]
+        except Exception as e:
+            debug_log(f"[OBS] get_transition_list fallito: {e}")
+            return []
+
+    def flash_scene(self, scene_name):
+        """Lampeggia una scena disabilitando e riabilitando tutti i suoi
+        scene item - usato in MODALITA' DEGENERATA (vedi brain.validate_scenes)
+        quando OBS ha una sola scena disponibile e non esiste un vero A/B da
+        alternare: da' comunque un accento visivo sui kick invece di restare
+        completamente statico. Bloccante per ~80ms (accettabile: e' un caso
+        limite raro, non il funzionamento normale)."""
+        try:
+            resp = self.client.get_scene_item_list(scene_name)
+            items = resp.scene_items
+            item_ids = []
+            for it in items:
+                if isinstance(it, dict):
+                    item_ids.append(it.get('sceneItemId'))
+                else:
+                    item_ids.append(getattr(it, 'scene_item_id', None))
+            item_ids = [i for i in item_ids if i is not None]
+
+            for item_id in item_ids:
+                self.client.set_scene_item_enabled(scene_name, item_id, False)
+            time.sleep(0.08)
+            for item_id in item_ids:
+                self.client.set_scene_item_enabled(scene_name, item_id, True)
+        except Exception as e:
+            debug_log(f"[OBS] flash_scene fallito ({scene_name}): {e}")
+
     def get_canvas_size(self):
         """Risoluzione del canvas OBS (base_width/base_height), usata come
         riferimento affidabile per il "100%" delle sorgenti con bounds fisso —

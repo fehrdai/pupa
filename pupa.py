@@ -156,6 +156,16 @@ def main():
     scenes = obs.cache_scenes()
     print(f"[PUPA] Mappate {len(scenes)} scene hardware stabili.")
 
+    # Valida coppie/transizioni configurate (scenes_config.yaml) contro
+    # quello che esiste DAVVERO in questa installazione OBS - scene_B/coppie/
+    # transizioni mancanti vengono tolte/sostituite invece di far crashare o
+    # bloccare tutto. Se resta una sola scena, PUPA lampeggia su quella
+    # invece di alternare A/B (vedi brain.validate_scenes).
+    transitions = obs.get_transition_list()
+    validation = brain.validate_scenes(scenes, transitions)
+    print(f"[PUPA] Validazione: {len(validation['couples'])} coppie valide"
+          f"{' | MODALITA DEGENERATA (1 sola scena)' if validation['degenerate'] else ''}")
+
     # Risolvi gli scene_item_id delle sorgenti da scalare a ritmo di musica,
     # e la loro dimensione base (per le sorgenti con "bounds" fisso, es.
     # OBS_BOUNDS_SCALE_INNER: scaleX/scaleY vengono ignorati da OBS in quel
@@ -290,13 +300,22 @@ def main():
                     logger=logger
                 )
                 
-                # Switch se necessario
-                if next_scene and next_scene != current_scene:
+                # Switch (o lampeggio, in MODALITA' DEGENERATA) se necessario.
+                # next_scene is not None (non "next_scene truthy and diverso
+                # da current_scene"): in modalita' degenerata next_scene E'
+                # current_scene di proposito (nessun vero switch, solo un
+                # lampeggio), altrimenti questo blocco verrebbe saltato del tutto.
+                if next_scene is not None:
                     trans_info = brain.get_transition_info()
                     trans_type = trans_info.get("type", "Burn")
                     trans_ms = int(trans_info.get("duration_ms", TRANSITION_MS))
                     is_return = trans_info.get("is_return", False)
                     kick_mode = trans_info.get("kick_mode", "")
+
+                    if kick_mode == "flash_single":
+                        print(f"[LAMPEGGIO] modalita' degenerata -> {current_scene}")
+                        obs.flash_scene(current_scene)
+                        continue
 
                     # SPERIMENTALE: ogni tanto, al posto di wave_kick, mostra
                     # una scena alternativa (es. "ago_talk") - per vedere se
