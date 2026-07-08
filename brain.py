@@ -186,6 +186,24 @@ BLACK_PAUSE_SCENE = SPECIAL_SCENES.get("black", "black_master")
 # mai durante gli stati energici (l'overlap e' gia' disattivato li').
 BLACK_PAUSE_PROBABILITY = 0.20
 BLACK_PAUSE_HOLD = (1.5, 3.5)  # secondi di nero
+
+# Pesi per stato nella scelta del colore di raffica/lampo: nero e bianco
+# SEMPRE dominanti (70% insieme, uguali tra loro), il terzo colore si
+# aggiunge come accento (30%) legato all'energia/genere del momento -
+# yellow=minimal/ambient (calmo), red=middle, blue=hard/fast (energico).
+# Filtrato automaticamente sui colori REALMENTE disponibili (vedi
+# validate_scenes) - se l'accento di stato non esiste ancora, resta solo
+# nero/bianco pesati.
+STROBE_COLOR_WEIGHTS = {
+    State.INTRO:  {"white_master": 0.35, "black_master": 0.35, "yellow_master": 0.30},
+    State.BREAK:  {"white_master": 0.35, "black_master": 0.35, "yellow_master": 0.30},
+    State.RELAX:  {"white_master": 0.35, "black_master": 0.35, "yellow_master": 0.30},
+    State.GROOVE: {"white_master": 0.35, "black_master": 0.35, "red_master": 0.30},
+    State.BUILD:  {"white_master": 0.35, "black_master": 0.35, "red_master": 0.30},
+    State.DROP:   {"white_master": 0.35, "black_master": 0.35, "blue_master": 0.30},
+    State.PEAK:   {"white_master": 0.35, "black_master": 0.35, "blue_master": 0.30},
+}
+
 STROBE_BURST_COUNT = 4          # numero di flash (ON+OFF) per raffica
 STROBE_BURST_INTERVAL = 0.10    # secondi tra un frame e l'altro della raffica
 STROBE_BURST_PROBABILITY = {
@@ -423,6 +441,19 @@ class HybridCouplesModel:
         self.last_shown_b_scene = self.current_b_scene
         return self.current_b_scene
 
+    def _pick_strobe_color(self):
+        """Sceglie il colore per la prossima raffica/lampo, pesato per stato
+        (vedi STROBE_COLOR_WEIGHTS): nero/bianco sempre dominanti, il terzo
+        colore legato a energia/genere si aggiunge come accento. Filtra sui
+        colori REALMENTE disponibili (STROBE_COLOR_POOL, gia' validato)."""
+        weights = STROBE_COLOR_WEIGHTS.get(self.current_state, {})
+        available_weighted = {c: w for c, w in weights.items() if c in STROBE_COLOR_POOL}
+        if not available_weighted:
+            return random.choice(STROBE_COLOR_POOL)
+        colors = list(available_weighted.keys())
+        weight_values = list(available_weighted.values())
+        return random.choices(colors, weights=weight_values, k=1)[0]
+
     def _trigger_strobe(self, current_scene, total_steps, return_scene=None, return_is_a=None,
                          alt_scene=None, transition_choice=None, interval=None):
         """Predispone una raffica strobo/lampo/cut (self.burst_active=True), pronta
@@ -448,7 +479,7 @@ class HybridCouplesModel:
         self.burst_step = -1  # verra' incrementato a 0 dentro _advance_burst
         self.burst_back_scene = current_scene
         self.burst_transition_choice = transition_choice or random.choice(STROBE_TRANSITION_CHOICES)
-        self.burst_alt_scene = alt_scene if alt_scene is not None else random.choice(STROBE_COLOR_POOL)
+        self.burst_alt_scene = alt_scene if alt_scene is not None else self._pick_strobe_color()
         self.burst_interval = interval or STROBE_BURST_INTERVAL
         self.burst_active = True
 
