@@ -10,13 +10,14 @@
 # alternare A/B.
 
 couples:
-  urbanfree_A:   [spectrumbar_B, tunnelwave_B]
-  psicodance_A:  [stormlightning_B, waveform1_B]
+  urbanfree_A:   [spectrumbar_B, radialspike_B]
+  psicodance_A:  [stormlightning_B, ring_B]
   montezuma_A:   [roundedbar_B, waveform2_B]
-  kusanagi_A:    [radialspike_B, stormlightning_B]
-  mri_A:         [waveform1_B, ring_B]
+  kusanagi_A:    [waveform1_B, tunnelwave_B]
+  mri_A:         [waveform1_B, tunnelwave_B]
   futureflash_A: [roundedbar_B, waveform2_B]
-  segnali_A:     [spectrumbar_B, ring_B]
+  segnali_A:     [spectrumbar_B, radialspike_B]
+  ago_talk:      [stormlightning_B, ring_B]
 
 couple_transitions:
   urbanfree_A:   [Blur, Displace]
@@ -26,6 +27,7 @@ couple_transitions:
   mri_A:         [Displace, Blur]
   futureflash_A: [Burn, Displace]
   segnali_A:     [Burn, Displace]
+  ago_talk:      [Displace, Burn]  # nessuna indicazione data - riuso il pool di psicodance_A (stesso pool_B)
 
 special_scenes:
   wave_kick: wave_kick
