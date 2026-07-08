@@ -88,6 +88,13 @@ def _resolve_audio_device(name):
 
 TRANSITION_MS = 2500
 
+# Varianti di wave_kick: ogni ingresso ne sceglie una a caso (mai la stessa
+# due volte di fila, vedi anti-repeat sotto) invece di mostrare sempre la
+# stessa immagine - "un po' troppo ripetitivo". Filtrate a quelle REALMENTE
+# presenti in OBS subito dopo la connessione (vedi piu' sotto); se nessuna
+# esiste ancora, fallback alla singola "wave_kick" originale.
+WAVE_KICK_VARIANTS = ["wave_kick1", "wave_kick2", "wave_kick3", "wave_kick4"]
+
 # SPERIMENTALE (2026-07-06): scene alternative a wave_kick, per vedere se
 # stanno bene alternate in modo randomico nel ciclo INTRO/BREAK. "ago_talk"
 # e' la cattura finestra del terminale che esegue pupa.py stesso.
@@ -165,6 +172,14 @@ def main():
     validation = brain.validate_scenes(scenes, transitions)
     print(f"[PUPA] Validazione: {len(validation['couples'])} coppie valide"
           f"{' | MODALITA DEGENERATA (1 sola scena)' if validation['degenerate'] else ''}")
+
+    # Varianti wave_kick REALMENTE presenti in OBS (vedi WAVE_KICK_VARIANTS
+    # sopra) - fallback alla singola "wave_kick" se nessuna esiste ancora.
+    available_wave_kick_variants = [s for s in WAVE_KICK_VARIANTS if s in scenes]
+    if not available_wave_kick_variants:
+        available_wave_kick_variants = ["wave_kick"]
+    print(f"[PUPA] Varianti wave_kick disponibili: {available_wave_kick_variants}")
+    last_wave_kick_variant = [None]  # lista per mutabilita' dentro il loop
 
     # Risolvi gli scene_item_id delle sorgenti da scalare a ritmo di musica,
     # e la loro dimensione base (per le sorgenti con "bounds" fisso, es.
@@ -329,8 +344,17 @@ def main():
                     # (kick_mode="overlap"), che kick_mode=="wave" da solo non
                     # intercettava - osservato dal vivo (solo 2/20 sostituiti
                     # invece del ~30% atteso).
-                    if next_scene == "wave_kick" and WAVE_KICK_ALT_SCENES and random.random() < WAVE_KICK_ALT_PROBABILITY:
-                        next_scene = random.choice(WAVE_KICK_ALT_SCENES)
+                    if next_scene == "wave_kick":
+                        # Variante wave_kick (sempre, non probabilistico) -
+                        # mai la stessa due volte di fila se ce n'e' piu' di una.
+                        choices = [v for v in available_wave_kick_variants if v != last_wave_kick_variant[0]] \
+                            or available_wave_kick_variants
+                        next_scene = random.choice(choices)
+                        last_wave_kick_variant[0] = next_scene
+
+                        # SPERIMENTALE: ogni tanto ago_talk al posto della variante
+                        if WAVE_KICK_ALT_SCENES and random.random() < WAVE_KICK_ALT_PROBABILITY:
+                            next_scene = random.choice(WAVE_KICK_ALT_SCENES)
 
                     if kick_mode == "wave":
                         print(f"[WAVE_KICK] entrata -> {trans_type} {trans_ms}ms ({next_scene})")

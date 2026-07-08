@@ -316,7 +316,7 @@ class HybridCouplesModel:
         # scene_A sono "in gioco" per i prossimi ~20 minuti
         self.meta_couple_start_time = 0
         self.current_meta_pair = []
-        self.meta_pair_history = deque(maxlen=3)
+        self.meta_pair_shuffle_bag = []  # "mazzo mescolato", vedi _select_new_meta_pair
 
         # STATE MACHINE
         self.current_state = State.INTRO
@@ -383,24 +383,38 @@ class HybridCouplesModel:
         self.last_switch_time = current_time
 
     def _select_new_meta_pair(self):
-        """Sceglie una nuova coppia randomica di 2 scene_A (vedi
-        META_COUPLE_DURATION): per i prossimi ~20 minuti _select_new_couple()
-        attinge solo da queste 2, invece che liberamente da tutte e 7.
+        """Sceglie una nuova coppia di 2 scene_A (vedi META_COUPLE_DURATION):
+        per i prossimi ~20 minuti _select_new_couple() attinge solo da
+        queste 2, invece che liberamente da tutte.
+
+        "Mazzo mescolato" (self.meta_pair_shuffle_bag): tutte le scene_A
+        vengono mescolate una volta e consumate a coppie finche' il mazzo
+        non si svuota, poi si rimescola - GARANTISCE che ognuna compaia
+        esattamente una volta ogni giro completo (con 8 scene = 4
+        meta-coppie, ~80min), invece di affidarsi al caso con una finestra
+        anti-repeat limitata (le precedenti 3 coppie) che non garantiva
+        copertura - "assicuriamoci che tutte le scene siano in rotazione
+        senza troppe ripetizioni".
 
         Se dopo validate_scenes() sopravvive 1 sola coppia (non 0 - quel
         caso e' DEGENERATE_MODE, gestito altrove - solo insufficiente per
-        un pair di 2), niente random.sample: resta l'unica disponibile."""
+        un pair di 2), il mazzo non serve: resta l'unica disponibile."""
         all_a = list(COUPLES.keys())
         if len(all_a) <= 2:
             self.current_meta_pair = list(all_a)
-            self.meta_pair_history.append(tuple(sorted(all_a)))
             return self.current_meta_pair
-        for _ in range(10):
-            pair = tuple(sorted(random.sample(all_a, 2)))
-            if pair not in self.meta_pair_history:
-                break
-        self.meta_pair_history.append(pair)
-        self.current_meta_pair = list(pair)
+
+        if len(self.meta_pair_shuffle_bag) < 2:
+            # Mazzo esaurito (o mai riempito): rimescola tutte le scene_A.
+            # Con un numero DISPARI di scene, l'ultima rimasta da sola in
+            # questo punto viene scartata per questo giro (ricompare nel
+            # prossimo mescolamento) - caso raro, non vale la complessita'
+            # di gestirlo esplicitamente finche' non capita con 8 scene pari.
+            self.meta_pair_shuffle_bag = list(all_a)
+            random.shuffle(self.meta_pair_shuffle_bag)
+
+        pair = [self.meta_pair_shuffle_bag.pop(), self.meta_pair_shuffle_bag.pop()]
+        self.current_meta_pair = pair
         return self.current_meta_pair
 
     def _select_new_couple(self):
