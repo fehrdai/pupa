@@ -29,4 +29,11 @@ couple_transitions:
 
 special_scenes:
   wave_kick: wave_kick
-  strobo: strobo_B
+  strobo: white_master   # rinominata da strobo_B
+  black: black_master
+
+# Pool di colori per la raffica strobo/lampo singolo: ad ogni raffica se ne
+# sceglie uno a caso (stesso colore per tutti i frame di QUELLA raffica, non
+# cambia a meta'). Se alcuni non esistono ancora in OBS, validate_scenes()
+# li toglie automaticamente dal pool.
+strobe_color_pool: [white_master, red_master, blue_master, yellow_master]

@@ -54,39 +54,43 @@ _DEFAULT_COUPLE_TRANSITIONS = {
     "futureflash_A": ["Burn", "Displace"],
     "segnali_A": ["Burn", "Displace"],
 }
-_DEFAULT_SPECIAL_SCENES = {"wave_kick": "wave_kick", "strobo": "strobo_B"}
+_DEFAULT_SPECIAL_SCENES = {"wave_kick": "wave_kick", "strobo": "white_master", "black": "black_master"}
+_DEFAULT_STROBE_COLOR_POOL = ["white_master", "red_master", "blue_master", "yellow_master"]
 
 SCENES_CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scenes_config.yaml")
 
 
 def _load_scenes_config(path=SCENES_CONFIG_PATH):
-    """Carica coppie/transizioni/scene speciali da scenes_config.yaml.
+    """Carica coppie/transizioni/scene speciali/pool colori da scenes_config.yaml.
     Fallback ai valori hardcoded sopra se il file manca, e' invalido, o
     pyyaml non e' installato - nessuna rottura per chi non lo tocca."""
+    defaults = (dict(_DEFAULT_COUPLES), dict(_DEFAULT_COUPLE_TRANSITIONS),
+                dict(_DEFAULT_SPECIAL_SCENES), list(_DEFAULT_STROBE_COLOR_POOL))
     if yaml is None:
         debug_log("[CONFIG] pyyaml non disponibile, uso valori hardcoded")
-        return dict(_DEFAULT_COUPLES), dict(_DEFAULT_COUPLE_TRANSITIONS), dict(_DEFAULT_SPECIAL_SCENES)
+        return defaults
     try:
         with open(path, "r", encoding="utf-8") as f:
             data = yaml.safe_load(f) or {}
         couples = data.get("couples") or _DEFAULT_COUPLES
         transitions = data.get("couple_transitions") or _DEFAULT_COUPLE_TRANSITIONS
         special = data.get("special_scenes") or _DEFAULT_SPECIAL_SCENES
+        color_pool = data.get("strobe_color_pool") or _DEFAULT_STROBE_COLOR_POOL
         debug_log(f"[CONFIG] scenes_config.yaml caricato: {len(couples)} coppie")
-        return couples, transitions, special
+        return couples, transitions, special, color_pool
     except FileNotFoundError:
         debug_log(f"[CONFIG] {path} non trovato, uso valori hardcoded")
-        return dict(_DEFAULT_COUPLES), dict(_DEFAULT_COUPLE_TRANSITIONS), dict(_DEFAULT_SPECIAL_SCENES)
+        return defaults
     except Exception as e:
         debug_log(f"[CONFIG] {path} invalido ({e}), uso valori hardcoded")
-        return dict(_DEFAULT_COUPLES), dict(_DEFAULT_COUPLE_TRANSITIONS), dict(_DEFAULT_SPECIAL_SCENES)
+        return defaults
 
 
 # COUPLES: ogni _A ha un POOL di possibili _B (non un abbinamento fisso 1:1).
 # Caricato da scenes_config.yaml (vedi _load_scenes_config), con fallback
 # hardcoded. Filtrato poi da validate_scenes() contro le scene REALMENTE
 # presenti in OBS - vedi sotto.
-COUPLES, COUPLE_TRANSITIONS, SPECIAL_SCENES = _load_scenes_config()
+COUPLES, COUPLE_TRANSITIONS, SPECIAL_SCENES, STROBE_COLOR_POOL = _load_scenes_config()
 
 # True se dopo validate_scenes() resta una sola scena in tutto (nessun vero
 # A/B possibile) - decide_next_scene() allora lampeggia sulla stessa scena
@@ -168,11 +172,20 @@ STATE_PARAMS = {
 # _B resta un'apparizione breve e occasionale invece di alternarsi 50/50.
 PROB_ENTER_B_ON_KICK = 0.4
 
-# Raffica strobo/flash: alterna rapidamente strobo_B <-> scena di base, N volte,
-# poi atterra sulla scena target normale. Implementata come piccola macchina a stati
-# che avanza di UN frame per ogni chiamata a decide_next_scene() (NON bloccante:
-# niente time.sleep, il loop a 20Hz continua a girare libero tra un frame e l'altro).
-STROBE_SCENE = SPECIAL_SCENES.get("strobo", "strobo_B")
+# Raffica strobo/flash: alterna rapidamente un colore (vedi STROBE_COLOR_POOL,
+# scelto random per OGNI raffica, stesso colore per tutti i suoi frame) <->
+# scena di base, N volte, poi atterra sulla scena target normale.
+# Implementata come piccola macchina a stati che avanza di UN frame per ogni
+# chiamata a decide_next_scene() (NON bloccante: niente time.sleep, il loop
+# a 20Hz continua a girare libero tra un frame e l'altro).
+STROBE_SCENE = SPECIAL_SCENES.get("strobo", "white_master")  # rinominata da strobo_B
+BLACK_PAUSE_SCENE = SPECIAL_SCENES.get("black", "black_master")
+# Frazione delle sovrapposizioni in stato calmo che diventano una PAUSA NERA
+# (schermo a black_master, hold, ritorno) invece del solito peek verso B/A -
+# "manca il nero... troppo illuminata" - una pausa senza immagini ogni tanto,
+# mai durante gli stati energici (l'overlap e' gia' disattivato li').
+BLACK_PAUSE_PROBABILITY = 0.20
+BLACK_PAUSE_HOLD = (1.5, 3.5)  # secondi di nero
 STROBE_BURST_COUNT = 4          # numero di flash (ON+OFF) per raffica
 STROBE_BURST_INTERVAL = 0.10    # secondi tra un frame e l'altro della raffica
 STROBE_BURST_PROBABILITY = {
@@ -424,8 +437,10 @@ class HybridCouplesModel:
         genera un vero switch). Se assenti, usa la logica di default del
         ciclo A/B normale.
 
-        alt_scene: scena alternata al posto di STROBE_SCENE (usato dalla raffica
-        di cut, che alterna verso l'altra scena della coppia invece di strobo_B).
+        alt_scene: scena alternata al posto del pool colori (usato dalla
+        raffica di cut, che alterna verso l'altra scena della coppia invece
+        che verso un colore). Se assente, sceglie a caso da STROBE_COLOR_POOL
+        (stesso colore per tutti i frame di QUESTA raffica, non cambia a meta').
         transition_choice: forza la transizione invece di sceglierla random da
         STROBE_TRANSITION_CHOICES (la raffica di cut vuole SEMPRE Taglio puro).
         interval: secondi tra un frame e l'altro, default STROBE_BURST_INTERVAL."""
@@ -433,7 +448,7 @@ class HybridCouplesModel:
         self.burst_step = -1  # verra' incrementato a 0 dentro _advance_burst
         self.burst_back_scene = current_scene
         self.burst_transition_choice = transition_choice or random.choice(STROBE_TRANSITION_CHOICES)
-        self.burst_alt_scene = alt_scene or STROBE_SCENE
+        self.burst_alt_scene = alt_scene if alt_scene is not None else random.choice(STROBE_COLOR_POOL)
         self.burst_interval = interval or STROBE_BURST_INTERVAL
         self.burst_active = True
 
@@ -500,6 +515,10 @@ class HybridCouplesModel:
         ritorno alla scena di partenza (nessun cambio scena netto). Non tocca
         self.in_scene_a: la sovrapposizione e' solo visiva, non un vero switch.
 
+        Una frazione di queste sovrapposizioni (BLACK_PAUSE_PROBABILITY)
+        diventa invece una PAUSA NERA vera (100%, non un blend parziale)
+        verso BLACK_PAUSE_SCENE - stessa meccanica di hold/ritorno.
+
         Ritorna peek_target_scene se innescata, altrimenti None (il chiamante
         procede con lo switch normale).
         """
@@ -509,19 +528,32 @@ class HybridCouplesModel:
 
         peek_is_return = not self.in_scene_a  # il peek va verso _A se partiamo da _B
 
-        # wave_kick coinvolto (in entrata o in ritorno): hold piu' lungo,
-        # dedicato, per dargli piu' presenza (vedi MIN_WAVE_KICK_DWELL sopra)
-        wave_kick_involved = peek_target_scene == "wave_kick" or current_scene == "wave_kick"
+        # PAUSA NERA: frazione delle sovrapposizioni in stato calmo diventa
+        # un vero "respiro" senza immagini (black_master) invece del solito
+        # peek parziale verso B/A - "manca il nero... troppo illuminata".
+        # A differenza del peek normale (blend 40-60%), qui si va al 100%
+        # (non ha senso una "mezza pausa nera" semi-trasparente).
+        is_black_pause = random.random() < BLACK_PAUSE_PROBABILITY
 
-        if wave_kick_involved:
-            hold_time = random.uniform(*OVERLAP_HOLD_WAVE_KICK)
-        elif peek_is_return:
-            hold_time = random.uniform(*OVERLAP_HOLD_B_TO_A)
+        if is_black_pause:
+            peek_target_scene = BLACK_PAUSE_SCENE
+            hold_time = random.uniform(*BLACK_PAUSE_HOLD)
+            forward_ms = random.randint(400, 800)
         else:
-            hold_time = random.uniform(*OVERLAP_HOLD_A_TO_B)
+            # wave_kick coinvolto (in entrata o in ritorno): hold piu' lungo,
+            # dedicato, per dargli piu' presenza (vedi MIN_WAVE_KICK_DWELL sopra)
+            wave_kick_involved = peek_target_scene == "wave_kick" or current_scene == "wave_kick"
 
-        target_pct = random.uniform(*OVERLAP_TARGET_BLEND)
-        forward_ms = max(150, int((hold_time * 1000) / target_pct))
+            if wave_kick_involved:
+                hold_time = random.uniform(*OVERLAP_HOLD_WAVE_KICK)
+            elif peek_is_return:
+                hold_time = random.uniform(*OVERLAP_HOLD_B_TO_A)
+            else:
+                hold_time = random.uniform(*OVERLAP_HOLD_A_TO_B)
+
+            target_pct = random.uniform(*OVERLAP_TARGET_BLEND)
+            forward_ms = max(150, int((hold_time * 1000) / target_pct))
+
         reverse_ms = random.randint(300, 600)
 
         self.overlap_active = True
@@ -538,8 +570,8 @@ class HybridCouplesModel:
         log_decision(
             from_scene=current_scene,
             to_scene=peek_target_scene,
-            reason=f"SOVRAPPOSIZIONE peek {target_pct*100:.0f}% (hold {hold_time:.1f}s, {self.overlap_transition_choice})",
-            energy="OVERLAP",
+            reason=f"{'PAUSA NERA' if is_black_pause else 'SOVRAPPOSIZIONE peek'} (hold {hold_time:.1f}s, {self.overlap_transition_choice})",
+            energy="BLACK PAUSE" if is_black_pause else "OVERLAP",
             duration=forward_ms / 1000,
             logger=logger
         )
@@ -758,7 +790,7 @@ class HybridCouplesModel:
         # trigger, durata legata all'intervallo del burst (niente pool/energia qui)
         if self.last_decision_kind == "burst_step":
             burst_duration_ms = int(self.burst_interval * 1000 * 0.7)
-            is_cut_burst = self.burst_alt_scene != STROBE_SCENE
+            is_cut_burst = self.burst_alt_scene not in STROBE_COLOR_POOL
             kick_mode = "cutburst" if is_cut_burst else "strobe"
             debug_log(f"[TRANS] {'CUT BURST' if is_cut_burst else 'STROBE'} frame: {self.burst_transition_choice} {burst_duration_ms}ms")
             return {
@@ -1260,8 +1292,12 @@ def validate_scenes(available_scenes, available_transitions):
     - Se alla fine non sopravvive nessuna coppia, o resta una sola scena in
       tutto: attiva DEGENERATE_MODE (vedi decide_next_scene), pupa lampeggia
       sulla stessa scena invece di alternare A/B.
+    - STROBE_COLOR_POOL: colori non trovati in OBS tolti dal pool (es. se
+      non hai ancora creato red/blue/yellow_master, resta solo white_master).
+    - BLACK_PAUSE_SCENE non trovata: pausa nera disattivata (probabilita' a
+      zero) invece di tentare switch a vuoto verso una scena inesistente.
     """
-    global COUPLES, COUPLE_TRANSITIONS, DEGENERATE_MODE
+    global COUPLES, COUPLE_TRANSITIONS, DEGENERATE_MODE, STROBE_COLOR_POOL, BLACK_PAUSE_PROBABILITY
 
     available_scenes_set = set(available_scenes)
     available_transitions = list(available_transitions)
@@ -1299,4 +1335,17 @@ def validate_scenes(available_scenes, available_transitions):
         DEGENERATE_MODE = False
         debug_log(f"[VALIDATE] {len(COUPLES)} coppie valide su {len(available_scenes_set)} scene OBS")
 
-    return {"couples": COUPLES, "couple_transitions": COUPLE_TRANSITIONS, "degenerate": DEGENERATE_MODE}
+    available_colors = [c for c in STROBE_COLOR_POOL if c in available_scenes_set]
+    if not available_colors:
+        available_colors = [STROBE_SCENE] if STROBE_SCENE in available_scenes_set else []
+    if available_colors != STROBE_COLOR_POOL:
+        debug_log(f"[VALIDATE] STROBE_COLOR_POOL ridotto a {available_colors} "
+                  f"(mancava/mancavano {set(STROBE_COLOR_POOL) - set(available_colors)})")
+    STROBE_COLOR_POOL = available_colors or ["white_master"]  # ultima rete di sicurezza, mai lista vuota
+
+    if BLACK_PAUSE_SCENE not in available_scenes_set:
+        debug_log(f"[VALIDATE] {BLACK_PAUSE_SCENE} non trovata, pausa nera disattivata")
+        BLACK_PAUSE_PROBABILITY = 0.0
+
+    return {"couples": COUPLES, "couple_transitions": COUPLE_TRANSITIONS, "degenerate": DEGENERATE_MODE,
+            "strobe_color_pool": STROBE_COLOR_POOL, "black_pause_enabled": BLACK_PAUSE_PROBABILITY > 0}
