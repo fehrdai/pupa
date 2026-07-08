@@ -58,6 +58,27 @@ dall'utente. L'ultima sessione (2026-07-02) ha chiuso con l'utente che dice
 
 ### 🔄 Milestone 3 — PUPA Brain (v0.6, tecnicamente completo, esito visivo da rivalutare)
 
+### 📋 Milestone 4/5 — Idee future (rimandate, non ancora implementate)
+- **Sequenze di immagini a tempo di musica**: sorgente `slideshow_v2`
+  ("Presentazione di immagini" in italiano) in `slide_mode: mode_manual`,
+  avanzata da pupa.py sui kick via WebSocket
+  (`TriggerHotkeyByName("SlideShow.NextSlide", contextName=<nome sorgente>)`)
+  invece di un video pre-renderizzato a velocita' fissa (problema con
+  futureflash_A/montezuma_A: il ritmo del taglio non si adatta al tempo
+  reale del brano). Fattibilita' VERIFICATA dal vivo (2026-07-xx): l'hotkey
+  esiste ed avanza la slide correttamente (verificato 2026-07-06). In
+  attesa che l'utente prepari le cartelle di immagini definitive (sfondo
+  nero/trasparente).
+- **Nero anticipatorio pre-drop**: buio un istante prima di un drop, non
+  solo durante gli stati calmi (vedi pausa nera gia' implementata via
+  overlap). Richiede rilevare un drop PRIMA che avvenga (oggi lo rileviamo
+  solo mentre e' in corso) - serve una logica predittiva non ancora presente.
+- **Mix Gruppo1/Gruppo2 tra scene_A**: proposta di dividere le 7 scene_A in
+  due sottogruppi (1: urbanfree/psicodance/kusanagi/segnali/mri, 2:
+  montezuma/futureflash) dove il Gruppo 2 entrerebbe in rotazione con le
+  scene_B nei cicli gia' definiti. Meccanismo esatto non ancora chiarito,
+  da riprendere quando serve.
+
 ---
 
 ## 🎯 Architettura Transizioni (v0.6 — stato REALE del codice)
