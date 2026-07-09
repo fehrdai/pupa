@@ -205,7 +205,8 @@ STROBE_COLOR_WEIGHTS = {
 }
 
 STROBE_BURST_COUNT = 4          # numero di flash (ON+OFF) per raffica
-STROBE_BURST_INTERVAL = 0.10    # secondi tra un frame e l'altro della raffica
+STROBE_BURST_INTERVAL = 0.10    # secondi tra un frame e l'altro, fallback se il BPM non e' ancora stimato
+STROBE_BEAT_DIVISOR = 4         # 1/4 di battito (sedicesimo) - a 150 BPM coincide col vecchio 0.10 fisso
 STROBE_BURST_PROBABILITY = {
     State.PEAK: 0.35,
     State.DROP: 0.15,
@@ -324,6 +325,7 @@ class HybridCouplesModel:
         self.energy_history = deque(maxlen=900)  # ~45s a 20Hz, per le soglie adattive (vedi _adaptive_thresholds)
         self.last_bass = 0  # Ultimo valore bass live, per modulazione continua
         self.last_bass_avg = 0  # Ultima media bass, per calcolare la velocita' del break
+        self.last_bpm = 0.0  # Ultimo BPM stimato da audio_analyzer, per l'intervallo strobo agganciato al beat
         self.last_energy_trend = 0  # bass - bass_avg dell'ultimo _update_state, per la raffica di cut
         self.recent_kick_peak_bass = 0  # Massimo kick visto nello stato corrente (per il lampo singolo GROOVE/BUILD)
         self.last_cut_burst_time = 0  # Cooldown tra una raffica di cut e la successiva
@@ -468,6 +470,16 @@ class HybridCouplesModel:
         weight_values = list(available_weighted.values())
         return random.choices(colors, weights=weight_values, k=1)[0]
 
+    def _get_strobe_interval(self):
+        """Intervallo tra un frame e l'altro di flash/raffica, agganciato al
+        beat reale (un sedicesimo, STROBE_BEAT_DIVISOR) quando il BPM e' gia'
+        stimato (audio_analyzer lo azzera durante i primi kick o se implausibile).
+        A 150 BPM coincide col vecchio valore fisso STROBE_BURST_INTERVAL, che
+        resta come fallback finche' il BPM non converge."""
+        if self.last_bpm <= 0:
+            return STROBE_BURST_INTERVAL
+        return 60.0 / self.last_bpm / STROBE_BEAT_DIVISOR
+
     def _trigger_strobe(self, current_scene, total_steps, return_scene=None, return_is_a=None,
                          alt_scene=None, transition_choice=None, interval=None):
         """Predispone una raffica strobo/lampo/cut (self.burst_active=True), pronta
@@ -547,7 +559,7 @@ class HybridCouplesModel:
             to_scene=target,
             reason=f"STROBE BURST frame {self.burst_step + 1}/{self.burst_total_steps}",
             energy="STROBE",
-            duration=STROBE_BURST_INTERVAL,
+            duration=self.burst_interval,
             logger=logger
         )
         return target
@@ -930,9 +942,11 @@ class HybridCouplesModel:
         bass_avg = audio_data.get("bass_avg", 0)
         is_kick = audio_data.get("is_kick", False)
         is_drop = audio_data.get("is_drop", False)
+        bpm = audio_data.get("bpm", 0.0)
 
         self.last_bass = bass
         self.last_bass_avg = bass_avg
+        self.last_bpm = bpm
         couple_elapsed = current_time - self.couple_start_time
 
         # Default: nessun "kind" speciale finche' non impostato da un branch specifico
@@ -1160,7 +1174,8 @@ class HybridCouplesModel:
                     flash_prob = STROBE_FLASH_PROBABILITY.get(State.INTRO, 0.0)
                     if flash_prob > 0 and random.random() < flash_prob:
                         self._trigger_strobe(current_scene, STROBE_FLASH_STEPS,
-                                              return_scene=current_scene, return_is_a=True)
+                                              return_scene=current_scene, return_is_a=True,
+                                              interval=self._get_strobe_interval())
                         return self._advance_burst(current_time, current_scene, logger)
 
                 return None
@@ -1225,7 +1240,8 @@ class HybridCouplesModel:
             # del normale singolo switch, con probabilita' crescente per stato
             burst_prob = STROBE_BURST_PROBABILITY.get(self.current_state, 0.0)
             if burst_prob > 0 and random.random() < burst_prob:
-                self._trigger_strobe(current_scene, STROBE_BURST_COUNT * 2)
+                self._trigger_strobe(current_scene, STROBE_BURST_COUNT * 2,
+                                      interval=self._get_strobe_interval())
                 return self._advance_burst(current_time, current_scene, logger)
 
             # LAMPO SINGOLO in GROOVE/BUILD: solo sul kick PIU' ALTO letto finora
@@ -1236,7 +1252,8 @@ class HybridCouplesModel:
                 self.recent_kick_peak_bass = bass
                 flash_prob = STROBE_FLASH_PROBABILITY.get(self.current_state, 0.0)
                 if flash_prob > 0 and random.random() < flash_prob:
-                    self._trigger_strobe(current_scene, STROBE_FLASH_STEPS)
+                    self._trigger_strobe(current_scene, STROBE_FLASH_STEPS,
+                                          interval=self._get_strobe_interval())
                     return self._advance_burst(current_time, current_scene, logger)
 
             # SOVRAPPOSIZIONE: possibilita' di un peek invece dello switch diretto
