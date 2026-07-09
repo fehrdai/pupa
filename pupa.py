@@ -275,6 +275,7 @@ def main():
                 is_drop = audio_data.get("is_drop", False)
                 db_level = audio_data.get("db_level", -60.0)
                 clipping = audio_data.get("clipping", False)
+                bpm = audio_data.get("bpm", 0.0)
 
                 bass_bar = "#" * int(bass / 5)
                 mid_bar = "#" * int(mid / 5)
@@ -288,7 +289,8 @@ def main():
                 if clipping:
                     event_label += " | CLIP!"
 
-                print(f"[AUDIO] B: [{bass_bar:<20}] M: [{mid_bar:<20}] H: [{hi_bar:<20}] dB:{db_level:6.1f}{event_label}")
+                bpm_label = f" | BPM:{bpm:5.1f}" if bpm > 0 else ""
+                print(f"[AUDIO] B: [{bass_bar:<20}] M: [{mid_bar:<20}] H: [{hi_bar:<20}] dB:{db_level:6.1f}{event_label}{bpm_label}")
 
                 # DECIDI SUBITO (ogni frame, senza delay)
                 current_scene = obs.get_current_scene()

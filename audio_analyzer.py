@@ -48,6 +48,18 @@ class AudioAnalyzer:
     SILENCE_ALERT_AFTER = 20.0    # secondi di silenzio continuo prima di allertare
     SILENCE_ALERT_COOLDOWN = 30.0  # secondi minimi tra un alert di silenzio e il successivo
 
+    # STIMA BPM (esplorativa): PUPA non leggeva affatto il tempo, solo
+    # eventi kick isolati. Stima il BPM dagli intervalli tra kick
+    # consecutivi - mediana (robusta a kick persi/spuri) invece di media,
+    # con un range di plausibilita' tipico EDM (60-180 BPM) per scartare
+    # intervalli spuri (rumore/doppio trigger) o troppo lunghi (break/silenzio).
+    BPM_MIN = 60.0
+    BPM_MAX = 180.0
+    BPM_MIN_INTERVAL_S = 60.0 / BPM_MAX  # 0.333s
+    BPM_MAX_INTERVAL_S = 60.0 / BPM_MIN  # 1.0s
+    BPM_HISTORY_SIZE = 8
+    BPM_SMOOTHING = 0.2  # EMA: quanto peso al nuovo valore ad ogni aggiornamento
+
     def __init__(self, device=8, channels=2, samplerate=44100, blocksize=2048):
         self.device = device
         self.channels = channels
@@ -86,6 +98,10 @@ class AudioAnalyzer:
         self.is_kick = False
         self.is_drop = False
         self.is_break = False
+
+        # Stima BPM (vedi costanti sopra)
+        self.kick_intervals = deque(maxlen=self.BPM_HISTORY_SIZE)
+        self.bpm = 0.0
         
         # AGC (Automatic Gain Control) - vedi _update_agc_ceiling()
         self.max_bass = 1.0
@@ -219,7 +235,7 @@ class AudioAnalyzer:
             self._last_level_log_time = now
             _level_logger.debug(
                 f"bass={bass_norm:.1f} mid={mid_norm:.1f} high={high_norm:.1f} "
-                f"dB={db_level:.1f} peak={peak:.3f} | tetto_agc bass={self.max_bass:.0f} "
+                f"dB={db_level:.1f} peak={peak:.3f} bpm={self.bpm:.1f} | tetto_agc bass={self.max_bass:.0f} "
                 f"mid={self.max_mid:.0f} high={self.max_high:.0f} | grezzo bass={bass_mag:.0f} "
                 f"mid={mid_mag:.0f} high={high_mag:.0f}"
             )
@@ -232,6 +248,44 @@ class AudioAnalyzer:
         if mag > ceiling:
             return ceiling * self.AGC_ATTACK + mag * (1 - self.AGC_ATTACK)
         return ceiling * self.AGC_RELEASE + mag * (1 - self.AGC_RELEASE)
+
+    def _update_bpm(self, interval_s):
+        """Aggiorna la stima BPM da un intervallo tra due kick consecutivi.
+
+        Se l'intervallo e' troppo lungo (kick ogni 2 beat invece che ogni
+        beat, comune in stili con groove piu' rado), lo dimezza UNA SOLA
+        VOLTA prima di validarlo - cattura il "doppio tempo" implicito senza
+        confondere un genere piu' lento con un BPM basso spurio. Un solo
+        dimezzamento (non un ciclo) e' voluto: con range 60-180 BPM (rapporto
+        3:1) dimezzamenti ripetuti finirebbero comunque per rientrare nel
+        range anche per gap lunghi di break/silenzio, sporcando la stima.
+        Fuori range anche dopo il dimezzamento -> ignorato.
+
+        Mediana (non media) sugli ultimi N intervalli: robusta a un singolo
+        kick perso o spurio, che altrimenti sposterebbe parecchio una media.
+        EMA finale per smoothing, ma abbastanza reattivo da seguire un vero
+        cambio di tempo (es. transizione b2b tra due brani diversi)."""
+        # Un solo dimezzamento: copre il "half-time feel" (kick ogni 2 beat)
+        # senza inghiottire gap lunghi (break/silenzio) che dimezzati ripetutamente
+        # finirebbero comunque per rientrare nel range e sporcare la stima.
+        if interval_s > self.BPM_MAX_INTERVAL_S and interval_s / 2 >= self.BPM_MIN_INTERVAL_S:
+            interval_s /= 2
+
+        if not (self.BPM_MIN_INTERVAL_S <= interval_s <= self.BPM_MAX_INTERVAL_S):
+            return
+
+        self.kick_intervals.append(interval_s)
+        if len(self.kick_intervals) < 4:
+            return
+
+        sorted_intervals = sorted(self.kick_intervals)
+        median_interval = sorted_intervals[len(sorted_intervals) // 2]
+        target_bpm = 60.0 / median_interval
+
+        if self.bpm == 0.0:
+            self.bpm = target_bpm
+        else:
+            self.bpm = self.bpm * (1 - self.BPM_SMOOTHING) + target_bpm * self.BPM_SMOOTHING
 
     def _detect_events(self):
         """Rileva kick, drop, break"""
@@ -246,10 +300,12 @@ class AudioAnalyzer:
         # KICK: bass delta > 14
         bass_delta = current_bass - prev_bass
         current_time = time.time() * 1000
-        
-        if (bass_delta > self.kick_threshold_bass_delta and 
+
+        if (bass_delta > self.kick_threshold_bass_delta and
             current_bass > self.kick_threshold_bass_min and
             (current_time - self.last_kick_time) > self.kick_cooldown_ms):
+            if self.last_kick_time > 0:
+                self._update_bpm((current_time - self.last_kick_time) / 1000.0)
             self.is_kick = True
             self.last_kick_time = current_time
         else:
@@ -280,6 +336,7 @@ class AudioAnalyzer:
                     "is_kick": False, "is_drop": False, "is_break": False,
                     "db_level": self.db_level,
                     "peak": self.last_peak, "clipping": self.clipping,
+                    "bpm": self.bpm,
                 }
 
             return {
@@ -295,4 +352,5 @@ class AudioAnalyzer:
                 "db_level": self.db_level,
                 "peak": self.last_peak,
                 "clipping": self.clipping,
+                "bpm": self.bpm,
             }
