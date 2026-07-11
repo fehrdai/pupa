@@ -428,39 +428,52 @@ class HybridCouplesModel:
         self.couple_history.append(self.current_couple_a)
         self.last_switch_time = current_time
 
-    def _select_new_meta_pair(self):
-        """Sceglie una nuova coppia di 2 scene_A (vedi META_COUPLE_DURATION):
-        per i prossimi ~20 minuti _select_new_couple() attinge solo da
-        queste 2, invece che liberamente da tutte.
+    def _get_identity_duos(self):
+        """Raggruppa le scene_A per pool_B condiviso - le 4 coppie-colore
+        (vedi IDENTITY/scenes_config.yaml: urbanfree_A+segnali_A=rosso,
+        psicodance_A+strobo_A=blu, montezuma_A+futureflash_A=giallo,
+        kusanagi_A+mri_A=verde). Calcolato dal vivo su COUPLES (gia'
+        filtrato da validate_scenes()), non hardcoded - resta corretto
+        anche se una scena_A sparisce da OBS (il suo duo diventa da 1 sola
+        scena invece di due, gestito senza casi speciali da chi lo consuma)."""
+        groups = {}
+        for a_scene, b_pool in COUPLES.items():
+            key = frozenset(b_pool)
+            groups.setdefault(key, []).append(a_scene)
+        return list(groups.values())
 
-        "Mazzo mescolato" (self.meta_pair_shuffle_bag): tutte le scene_A
-        vengono mescolate una volta e consumate a coppie finche' il mazzo
-        non si svuota, poi si rimescola - GARANTISCE che ognuna compaia
-        esattamente una volta ogni giro completo (con 8 scene = 4
-        meta-coppie, ~80min), invece di affidarsi al caso con una finestra
-        anti-repeat limitata (le precedenti 3 coppie) che non garantiva
-        copertura - "assicuriamoci che tutte le scene siano in rotazione
-        senza troppe ripetizioni".
+    def _select_new_meta_pair(self):
+        """Sceglie una nuova meta-coppia (vedi META_COUPLE_DURATION): per i
+        prossimi ~20 minuti _select_new_couple() attinge solo da queste
+        scene_A, invece che liberamente da tutte.
+
+        L'unita' del mazzo e' un DUO-COLORE intero (_get_identity_duos), non
+        una singola scena_A: cosi' ogni finestra di 20 min resta su
+        un'unica identita' colore, mai una combinazione mista tra due duo
+        diversi ("le coppie dei 20min combaciano con lo schema dei
+        colori?" - verificato che PRIMA no, solo 16% per puro caso).
+
+        "Mazzo mescolato" (self.meta_pair_shuffle_bag): tutti i duo vengono
+        mescolati una volta e consumati uno alla volta finche' il mazzo non
+        si svuota, poi si rimescola - GARANTISCE che ognuno compaia
+        esattamente una volta ogni giro completo (4 duo, ~80min), invece di
+        affidarsi al caso con una finestra anti-repeat limitata (le
+        precedenti 3 coppie) che non garantiva copertura.
 
         Se dopo validate_scenes() sopravvive 1 sola coppia (non 0 - quel
-        caso e' DEGENERATE_MODE, gestito altrove - solo insufficiente per
-        un pair di 2), il mazzo non serve: resta l'unica disponibile."""
+        caso e' DEGENERATE_MODE, gestito altrove), il mazzo non serve:
+        resta l'unica disponibile."""
         all_a = list(COUPLES.keys())
         if len(all_a) <= 2:
             self.current_meta_pair = list(all_a)
             return self.current_meta_pair
 
-        if len(self.meta_pair_shuffle_bag) < 2:
-            # Mazzo esaurito (o mai riempito): rimescola tutte le scene_A.
-            # Con un numero DISPARI di scene, l'ultima rimasta da sola in
-            # questo punto viene scartata per questo giro (ricompare nel
-            # prossimo mescolamento) - caso raro, non vale la complessita'
-            # di gestirlo esplicitamente finche' non capita con 8 scene pari.
-            self.meta_pair_shuffle_bag = list(all_a)
+        if not self.meta_pair_shuffle_bag:
+            self.meta_pair_shuffle_bag = self._get_identity_duos()
             random.shuffle(self.meta_pair_shuffle_bag)
 
-        pair = [self.meta_pair_shuffle_bag.pop(), self.meta_pair_shuffle_bag.pop()]
-        self.current_meta_pair = pair
+        duo = self.meta_pair_shuffle_bag.pop()
+        self.current_meta_pair = list(duo)
         return self.current_meta_pair
 
     def _select_new_couple(self):
