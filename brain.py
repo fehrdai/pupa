@@ -398,15 +398,27 @@ class HybridCouplesModel:
         self.overlap_transition_choice = "Fade"
 
     def initialize(self, current_scene, current_time):
-        """Inizializza stato e coppia"""
-        if current_scene.endswith("_A"):
-            self.current_couple_a = current_scene
-            self.in_scene_a = True
-        else:
-            self.current_couple_a = "urbanfree_A"
-            self.in_scene_a = False
+        """Inizializza stato e coppia.
 
-        self.current_meta_pair = self._select_new_meta_pair()
+        Scena_A di partenza SEMPRE randomizzata tra tutte quelle valide,
+        ignorando quale scena_A OBS sta gia' mostrando (che tra un test e
+        l'altro resta quasi sempre la stessa, es. urbanfree_A - "vedo
+        sempre urbanfree_A"). pupa.py forza poi lo switch reale in OBS
+        subito dopo initialize_model(), cosi' quello che si vede combacia
+        da subito con quello che il modello crede.
+
+        Prima meta-coppia (vedi META_COUPLE_DURATION) = TUTTE le scene_A
+        invece delle solite 2 - "almeno al primo avvio deve far vedere
+        tutte le 8 scene_A", che con la normale finestra di 2 alla volta
+        richiederebbe fino a ~80min per una copertura completa. Dalla
+        SECONDA meta-coppia in poi (al primo scadere dei 20 min) si torna
+        al normale mazzo mescolato da 2."""
+        all_a = list(COUPLES.keys())
+        self.current_couple_a = random.choice(all_a) if all_a else "urbanfree_A"
+        self.in_scene_a = True
+
+        self.current_meta_pair = list(all_a)
+        self.meta_pair_shuffle_bag = []  # forza un mescolamento fresco al primo vero cambio meta-coppia
         self.meta_couple_start_time = current_time
 
         self.current_b_scene = self._roll_next_b_scene()
@@ -1424,6 +1436,14 @@ def get_identity_wave_kick_variant():
     scenes_config.yaml), o None se non definita/non disponibile in OBS -
     pupa.py ricade sulla selezione random generica in quel caso."""
     return model._get_identity().get("wave_kick")
+
+def get_current_couple_a():
+    """Scena_A su cui il modello crede di trovarsi ORA (randomizzata da
+    initialize_model - vedi HybridCouplesModel.initialize). pupa.py la usa
+    subito dopo l'init per forzare un vero switch OBS, cosi' lo schermo
+    combacia da subito con lo stato interno invece di aspettare il primo
+    switch organico."""
+    return model.current_couple_a
 
 
 _UNIVERSAL_FALLBACK_TRANSITIONS = ["Cut", "Taglio", "Fade", "Dissolvenza"]

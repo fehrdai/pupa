@@ -258,6 +258,16 @@ def main():
 
     current_scene = obs.get_current_scene()
     brain.initialize_model(current_scene, time.time())
+
+    # Scena_A di partenza randomizzata (vedi HybridCouplesModel.initialize) -
+    # forza lo switch reale in OBS subito, altrimenti lo schermo resterebbe
+    # sulla scena su cui OBS era gia' fermo (spesso la stessa tra un test e
+    # l'altro, "vedo sempre urbanfree_A") finche' non arriva il primo switch
+    # organico. Nessun cambio se per puro caso e' gia' la stessa.
+    starting_couple_a = brain.get_current_couple_a()
+    if starting_couple_a != current_scene:
+        obs.switch_scene(starting_couple_a, transition_ms=800, transition_type="Fade")
+        current_scene = starting_couple_a
     print(f"[BRAIN] Inizializzato su scena: {current_scene}")
     
     running = True
