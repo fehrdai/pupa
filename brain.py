@@ -1297,10 +1297,19 @@ class HybridCouplesModel:
             self.last_switch_time = current_time
 
             # RAFFICA STROBO: possibilita' di innescare un burst strobo_B invece
-            # del normale singolo switch, con probabilita' crescente per stato
+            # del normale singolo switch, con probabilita' crescente per stato.
+            # Colore identitario della scena_A corrente (non piu' quello legato
+            # allo stato DROP/PEAK) - la raffica resta l'evento piu' vistoso
+            # (8 frame vs i 2 del lampo), quindi era lei a "vincere" sempre con
+            # l'azzurro/blu anche quando il lampo colorava gia' di rosso/verde/
+            # giallo altrove: osservato dal vivo (9 lampi rossi contro 4
+            # raffiche blu nella stessa sessione, ma il blu restava l'unico
+            # colore percepito). Fallback al colore di stato se la scena_A non
+            # ha un colore identitario valido (vedi _trigger_strobe/alt_scene).
             burst_prob = STROBE_BURST_PROBABILITY.get(self.current_state, 0.0)
             if burst_prob > 0 and random.random() < burst_prob:
                 self._trigger_strobe(current_scene, STROBE_BURST_COUNT * 2,
+                                      alt_scene=self._get_identity().get("color"),
                                       interval=self._get_strobe_interval())
                 return self._advance_burst(current_time, current_scene, logger)
 
