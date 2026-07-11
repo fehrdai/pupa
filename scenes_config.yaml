@@ -52,9 +52,9 @@ strobe_color_pool: [white_master, red_master, blue_master, yellow_master, green_
 identity:
   urbanfree_A:   {transition: Spiral,       color: red_master,    wave_kick: wave_kick1}
   segnali_A:     {transition: Spiral,       color: red_master,    wave_kick: wave_kick1}
-  psicodance_A:  {transition: Diaframmatic, color: blue_master,   wave_kick: wave_kick2}
-  strobo_A:      {transition: Diaframmatic, color: blue_master,   wave_kick: wave_kick2}
-  montezuma_A:   {transition: Circles,      color: yellow_master, wave_kick: wave_kick3}
-  futureflash_A: {transition: Circles,      color: yellow_master, wave_kick: wave_kick3}
+  psicodance_A:  {transition: Diaframmatic, color: blue_master,   wave_kick: wave_kick3}
+  strobo_A:      {transition: Diaframmatic, color: blue_master,   wave_kick: wave_kick3}
+  montezuma_A:   {transition: Circles,      color: yellow_master, wave_kick: wave_kick2}
+  futureflash_A: {transition: Circles,      color: yellow_master, wave_kick: wave_kick2}
   kusanagi_A:    {transition: Fractal,      color: green_master,  wave_kick: wave_kick4}
   mri_A:         {transition: Fractal,      color: green_master,  wave_kick: wave_kick4}
