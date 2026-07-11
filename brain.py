@@ -44,6 +44,7 @@ _DEFAULT_COUPLES = {
     "mri_A":         ["waveform1_B", "ring_B"],
     "futureflash_A": ["roundedbar_B", "waveform2_B"],
     "segnali_A":     ["spectrumbar_B", "ring_B"],
+    "strobo_A":      ["stormlightning_B", "ring_B"],
 }
 _DEFAULT_COUPLE_TRANSITIONS = {
     "urbanfree_A": ["Blur", "Displace"],
@@ -53,6 +54,7 @@ _DEFAULT_COUPLE_TRANSITIONS = {
     "mri_A": ["Displace", "Blur"],
     "futureflash_A": ["Burn", "Displace"],
     "segnali_A": ["Burn", "Displace"],
+    "strobo_A": ["Displace", "Burn"],
 }
 _DEFAULT_SPECIAL_SCENES = {"wave_kick": "wave_kick", "strobo": "white_master", "black": "black_master"}
 _DEFAULT_STROBE_COLOR_POOL = ["white_master", "red_master", "blue_master", "yellow_master"]
