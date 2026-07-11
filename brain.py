@@ -57,17 +57,31 @@ _DEFAULT_COUPLE_TRANSITIONS = {
     "strobo_A": ["Displace", "Burn"],
 }
 _DEFAULT_SPECIAL_SCENES = {"wave_kick": "wave_kick", "strobo": "white_master", "black": "black_master"}
-_DEFAULT_STROBE_COLOR_POOL = ["white_master", "red_master", "blue_master", "yellow_master"]
+_DEFAULT_STROBE_COLOR_POOL = ["white_master", "red_master", "blue_master", "yellow_master", "green_master"]
+# IDENTITA' per scena_A (vedi scenes_config.yaml per la spiegazione): transizione
+# "firma" di ingresso coppia, colore identitario del lampo 40/30/30, variante
+# wave_kick dedicata. Le 8 scene_A si accoppiano 2 a 2 per pool _B condiviso.
+_DEFAULT_IDENTITY = {
+    "urbanfree_A":   {"transition": "Spiral",       "color": "red_master",    "wave_kick": "wave_kick1"},
+    "segnali_A":     {"transition": "Spiral",       "color": "red_master",    "wave_kick": "wave_kick1"},
+    "psicodance_A":  {"transition": "Diaframmatic", "color": "blue_master",   "wave_kick": "wave_kick2"},
+    "strobo_A":      {"transition": "Diaframmatic", "color": "blue_master",   "wave_kick": "wave_kick2"},
+    "montezuma_A":   {"transition": "Circles",      "color": "yellow_master", "wave_kick": "wave_kick3"},
+    "futureflash_A": {"transition": "Circles",      "color": "yellow_master", "wave_kick": "wave_kick3"},
+    "kusanagi_A":    {"transition": "Fractal",      "color": "green_master",  "wave_kick": "wave_kick4"},
+    "mri_A":         {"transition": "Fractal",      "color": "green_master",  "wave_kick": "wave_kick4"},
+}
 
 SCENES_CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scenes_config.yaml")
 
 
 def _load_scenes_config(path=SCENES_CONFIG_PATH):
-    """Carica coppie/transizioni/scene speciali/pool colori da scenes_config.yaml.
-    Fallback ai valori hardcoded sopra se il file manca, e' invalido, o
-    pyyaml non e' installato - nessuna rottura per chi non lo tocca."""
+    """Carica coppie/transizioni/scene speciali/pool colori/identita' da
+    scenes_config.yaml. Fallback ai valori hardcoded sopra se il file manca,
+    e' invalido, o pyyaml non e' installato - nessuna rottura per chi non lo tocca."""
     defaults = (dict(_DEFAULT_COUPLES), dict(_DEFAULT_COUPLE_TRANSITIONS),
-                dict(_DEFAULT_SPECIAL_SCENES), list(_DEFAULT_STROBE_COLOR_POOL))
+                dict(_DEFAULT_SPECIAL_SCENES), list(_DEFAULT_STROBE_COLOR_POOL),
+                dict(_DEFAULT_IDENTITY))
     if yaml is None:
         debug_log("[CONFIG] pyyaml non disponibile, uso valori hardcoded")
         return defaults
@@ -78,8 +92,9 @@ def _load_scenes_config(path=SCENES_CONFIG_PATH):
         transitions = data.get("couple_transitions") or _DEFAULT_COUPLE_TRANSITIONS
         special = data.get("special_scenes") or _DEFAULT_SPECIAL_SCENES
         color_pool = data.get("strobe_color_pool") or _DEFAULT_STROBE_COLOR_POOL
+        identity = data.get("identity") or _DEFAULT_IDENTITY
         debug_log(f"[CONFIG] scenes_config.yaml caricato: {len(couples)} coppie")
-        return couples, transitions, special, color_pool
+        return couples, transitions, special, color_pool, identity
     except FileNotFoundError:
         debug_log(f"[CONFIG] {path} non trovato, uso valori hardcoded")
         return defaults
@@ -92,7 +107,7 @@ def _load_scenes_config(path=SCENES_CONFIG_PATH):
 # Caricato da scenes_config.yaml (vedi _load_scenes_config), con fallback
 # hardcoded. Filtrato poi da validate_scenes() contro le scene REALMENTE
 # presenti in OBS - vedi sotto.
-COUPLES, COUPLE_TRANSITIONS, SPECIAL_SCENES, STROBE_COLOR_POOL = _load_scenes_config()
+COUPLES, COUPLE_TRANSITIONS, SPECIAL_SCENES, STROBE_COLOR_POOL, IDENTITY = _load_scenes_config()
 
 # True se dopo validate_scenes() resta una sola scena in tutto (nessun vero
 # A/B possibile) - decide_next_scene() allora lampeggia sulla stessa scena
@@ -174,6 +189,21 @@ STATE_PARAMS = {
 # _B resta un'apparizione breve e occasionale invece di alternarsi 50/50.
 PROB_ENTER_B_ON_KICK = 0.4
 
+# CICLO PRINCIPALE 40/30/30: quando un kick NON viene assorbito (vedi
+# PROB_ENTER_B_ON_KICK sopra), invece di andare SEMPRE a scena_B, si sceglie
+# tra 3 destinazioni pesate - stessa idea di scena_B ma con piu' varieta' ed
+# "esaltando" la scena_A col suo colore/wave_kick identitari (vedi IDENTITY).
+# Le raffiche vere (STROBE_BURST) restano riservate a DROP/PEAK come prima -
+# non toccate da questo schema, che si applica solo quando il kick arriva
+# fin qui SENZA gia' aver innescato una raffica sopra. DROP resta intatto
+# (torna sempre e comunque ad A, gestito in un branch separato PRIMA di
+# questo). INTRO/BREAK NON passano di qui: mantengono la loro logica
+# dedicata pre-esistente (vedi sezione 3, invariata) - il nuovo schema e' in
+# prova SOLO nel ciclo energetico principale (BUILD/GROOVE/DROP/PEAK/RELAX).
+MAIN_CYCLE_B_PROB = 0.40
+MAIN_CYCLE_WAVE_KICK_PROB = 0.30
+MAIN_CYCLE_COLOR_PROB = 0.30
+
 # Raffica strobo/flash: alterna rapidamente un colore (vedi STROBE_COLOR_POOL,
 # scelto random per OGNI raffica, stesso colore per tutti i suoi frame) <->
 # scena di base, N volte, poi atterra sulla scena target normale.
@@ -215,21 +245,21 @@ STROBE_BURST_PROBABILITY = {
 }
 STROBE_TRANSITION_CHOICES = ["Taglio", "White Fade"]  # provate entrambe, scelta random ad ogni raffica
 
-# LAMPO SINGOLO in GROOVE/BUILD/INTRO: un solo ON+OFF (non una raffica
-# completa), innescato solo sul kick PIU' ALTO letto finora nello stato
-# corrente (nuovo "massimo personale", non un kick qualunque), e comunque
-# solo con probabilita' (non garantito anche quando lo e'). Riusa la stessa
+# LAMPO SINGOLO in INTRO: un solo ON+OFF (non una raffica completa),
+# innescato solo sul kick PIU' ALTO letto finora nello stato corrente (nuovo
+# "massimo personale"), e comunque solo con probabilita'. Riusa la stessa
 # macchina a stati della raffica strobo, con STROBE_FLASH_STEPS al posto di
-# STROBE_BURST_COUNT*2. INTRO aggiunto e probabilita' GROOVE alzata su
-# richiesta esplicita (vedi CUT_PROBABILITY_BY_STATE sopra) - in INTRO NON
-# fa scattare una raffica completa (mai chiesta li'), gestito con una
-# chiamata dedicata dentro il ramo wave_kick (il ciclo A/B normale, dove
-# vive la logica dei lampi, non e' raggiungibile durante INTRO/BREAK).
-FLASH_STATES = (State.GROOVE, State.BUILD, State.INTRO)
+# STROBE_BURST_COUNT*2. Gestito con una chiamata dedicata dentro il ramo
+# wave_kick (il ciclo A/B normale, dove viveva anche il lampo GROOVE/BUILD,
+# non e' raggiungibile durante INTRO/BREAK - lasciati intatti, vedi sezione 3).
+#
+# GROOVE/BUILD tolti da qui (erano gia' presenti prima del ciclo 40/30/30 in
+# prova nel ciclo energetico principale, vedi MAIN_CYCLE_*): l'esito "color"
+# di quel ciclo copre lo stesso ruolo (lampo colore su kick non assorbito)
+# con un colore identitario per scena_A invece che per stato - tenerli
+# entrambi avrebbe fatto competere due colori diversi sullo stesso lampo.
 STROBE_FLASH_STEPS = 2  # 1 ON + 1 OFF = un singolo lampo
 STROBE_FLASH_PROBABILITY = {
-    State.GROOVE: 0.20,
-    State.BUILD: 0.18,
     State.INTRO: 0.15,
 }
 
@@ -458,6 +488,13 @@ class HybridCouplesModel:
         self.current_b_scene = self._select_b_scene(self.current_couple_a, exclude=self.last_shown_b_scene)
         self.last_shown_b_scene = self.current_b_scene
         return self.current_b_scene
+
+    def _get_identity(self):
+        """Ritorna il dict identita' (transition/color/wave_kick) della
+        scena_A corrente, gia' filtrato da validate_scenes() sui campi
+        REALMENTE disponibili in OBS. Dict vuoto se la scena_A non e' in
+        IDENTITY - i chiamanti gestiscono il fallback campo per campo."""
+        return IDENTITY.get(self.current_couple_a, {})
 
     def _pick_strobe_color(self):
         """Sceglie il colore per la prossima raffica/lampo, pesato per stato
@@ -826,6 +863,22 @@ class HybridCouplesModel:
             debug_log("[TRANS] MODALITA' DEGENERATA: lampeggio")
             return {"type": "Taglio", "duration_ms": 100, "is_return": False, "kick_mode": "flash_single"}
 
+        # CAMBIO COPPIA: transizione "firma" della nuova scena_A (vedi
+        # IDENTITY), un'unica volta all'ingresso. Controllato PRIMA del
+        # branch generico INTRO sotto, perche' current_state e' gia' INTRO
+        # a questo punto (impostato da decide_next_scene insieme al kind).
+        # Fallback al normale Fade se la scena_A non ha una firma valida
+        # (non in IDENTITY, o firma non disponibile in OBS - gia' filtrato
+        # da validate_scenes).
+        if self.last_decision_kind == "couple_start":
+            signature = self._get_identity().get("transition")
+            fade_ms = self._get_fade_duration_ms()
+            if signature:
+                debug_log(f"[TRANS] CAMBIO COPPIA: firma '{signature}' {fade_ms}ms")
+                return {"type": signature, "duration_ms": fade_ms, "is_return": False, "kick_mode": "couple_start"}
+            debug_log(f"[TRANS] CAMBIO COPPIA: nessuna firma per {self.current_couple_a}, Fade {fade_ms}ms")
+            return {"type": "Fade", "duration_ms": fade_ms, "is_return": False, "kick_mode": "couple_start"}
+
         # Sovrapposizione: leg di andata (peek) o di ritorno (base)
         if self.last_decision_kind == "overlap_forward":
             debug_log(f"[TRANS] SOVRAPPOSIZIONE peek: {self.overlap_transition_choice} {self.overlap_forward_duration_ms}ms")
@@ -1041,6 +1094,11 @@ class HybridCouplesModel:
             self.in_scene_a = True
             self.last_switch_time = current_time
             self.last_transition_is_return = False  # Nuova coppia, ingresso "forward" su _A
+            # Transizione "firma" (Spiral/Diaframmatic/Circles/Fractal): un
+            # kind dedicato, perche' self.current_state e' gia' INTRO qui sopra
+            # - senza un kind distinto, _get_transition_info() userebbe il
+            # normale Fade/Taglio di INTRO invece della firma della nuova coppia.
+            self.last_decision_kind = "couple_start"
 
             log_decision(
                 from_scene=current_scene,
@@ -1246,18 +1304,6 @@ class HybridCouplesModel:
                                       interval=self._get_strobe_interval())
                 return self._advance_burst(current_time, current_scene, logger)
 
-            # LAMPO SINGOLO in GROOVE/BUILD: solo sul kick PIU' ALTO letto finora
-            # nello stato corrente (nuovo "massimo personale", non un kick
-            # qualunque), e comunque solo con probabilita' - non garantito anche
-            # quando lo e'. Vedi FLASH_STATES/STROBE_FLASH_PROBABILITY sopra.
-            if self.current_state in FLASH_STATES and bass > self.recent_kick_peak_bass:
-                self.recent_kick_peak_bass = bass
-                flash_prob = STROBE_FLASH_PROBABILITY.get(self.current_state, 0.0)
-                if flash_prob > 0 and random.random() < flash_prob:
-                    self._trigger_strobe(current_scene, STROBE_FLASH_STEPS,
-                                          interval=self._get_strobe_interval())
-                    return self._advance_burst(current_time, current_scene, logger)
-
             # SOVRAPPOSIZIONE: possibilita' di un peek invece dello switch diretto
             # (probabilita' ZERO durante BUILD/GROOVE/DROP/PEAK — vedi _get_overlap_probability)
             # peek_target verso B e' SEMPRE self.current_b_scene (fissata a
@@ -1281,6 +1327,43 @@ class HybridCouplesModel:
                 if random.random() >= PROB_ENTER_B_ON_KICK:
                     return None
 
+                # CICLO PRINCIPALE 40/30/30 (IN PROVA): non assorbito -> 3
+                # destinazioni pesate invece di andare sempre a scena_B (vedi
+                # MAIN_CYCLE_* sopra). wave_kick riusa la stessa macchina di
+                # dwell/timeout/ritorno gia' esistente (temp_b_scene), quindi
+                # si comporta esattamente come l'ingresso INTRO/BREAK una
+                # volta atterrato li'. Il colore torna sulla stessa scena_A
+                # (non su _B) - e' un accento, non un vero switch.
+                outcome = random.choices(
+                    ["b", "wave_kick", "color"],
+                    weights=[MAIN_CYCLE_B_PROB, MAIN_CYCLE_WAVE_KICK_PROB, MAIN_CYCLE_COLOR_PROB],
+                    k=1
+                )[0]
+
+                if outcome == "wave_kick":
+                    self.in_scene_a = False
+                    self.last_transition_is_return = False  # A -> wave_kick
+                    self.temp_b_scene = "wave_kick"
+                    if self.temp_b_scene_time == 0:
+                        self.temp_b_scene_time = current_time
+
+                    log_decision(
+                        from_scene=current_scene,
+                        to_scene="wave_kick",
+                        reason=f"KICK wave_kick ({couple_pct:.0f}%) | {self.current_state.value} [ciclo 40/30/30]",
+                        energy=self.current_state.value.upper(),
+                        duration=self._get_fade_ms() / 1000,
+                        logger=logger
+                    )
+                    return "wave_kick"
+
+                if outcome == "color":
+                    identity_color = self._get_identity().get("color")
+                    self._trigger_strobe(current_scene, STROBE_FLASH_STEPS,
+                                          return_scene=current_scene, return_is_a=True,
+                                          alt_scene=identity_color, interval=self._get_strobe_interval())
+                    return self._advance_burst(current_time, current_scene, logger)
+
                 self.in_scene_a = False
                 self.last_transition_is_return = False  # A -> B
                 # NON si rirolla la _B qui: resta quella fissata a inizio
@@ -1290,7 +1373,7 @@ class HybridCouplesModel:
                 log_decision(
                     from_scene=current_scene,
                     to_scene=self.current_b_scene,
-                    reason=f"KICK B ({couple_pct:.0f}%) | {self.current_state.value}",
+                    reason=f"KICK B ({couple_pct:.0f}%) | {self.current_state.value} [ciclo 40/30/30]",
                     energy=self.current_state.value.upper(),
                     duration=self._get_fade_ms() / 1000,
                     logger=logger
@@ -1327,6 +1410,12 @@ def get_transition_info():
 def initialize_model(current_scene, current_time):
     model.initialize(current_scene, current_time)
 
+def get_identity_wave_kick_variant():
+    """Variante wave_kick dedicata alla scena_A corrente (vedi IDENTITY in
+    scenes_config.yaml), o None se non definita/non disponibile in OBS -
+    pupa.py ricade sulla selezione random generica in quel caso."""
+    return model._get_identity().get("wave_kick")
+
 
 _UNIVERSAL_FALLBACK_TRANSITIONS = ["Cut", "Taglio", "Fade", "Dissolvenza"]
 
@@ -1361,7 +1450,7 @@ def validate_scenes(available_scenes, available_transitions):
     - BLACK_PAUSE_SCENE non trovata: pausa nera disattivata (probabilita' a
       zero) invece di tentare switch a vuoto verso una scena inesistente.
     """
-    global COUPLES, COUPLE_TRANSITIONS, DEGENERATE_MODE, STROBE_COLOR_POOL, BLACK_PAUSE_PROBABILITY
+    global COUPLES, COUPLE_TRANSITIONS, DEGENERATE_MODE, STROBE_COLOR_POOL, BLACK_PAUSE_PROBABILITY, IDENTITY
 
     available_scenes_set = set(available_scenes)
     available_transitions = list(available_transitions)
@@ -1410,6 +1499,31 @@ def validate_scenes(available_scenes, available_transitions):
     if BLACK_PAUSE_SCENE not in available_scenes_set:
         debug_log(f"[VALIDATE] {BLACK_PAUSE_SCENE} non trovata, pausa nera disattivata")
         BLACK_PAUSE_PROBABILITY = 0.0
+
+    # IDENTITA' per scena_A: scarta le entry di scene_A non sopravvissute alla
+    # validazione, e per quelle rimaste toglie i singoli campi (transition/
+    # color/wave_kick) non ancora presenti in OBS - _get_identity() ricade sui
+    # meccanismi generici pre-esistenti quando un campo manca, invece di
+    # tentare uno switch a vuoto verso una transizione/scena inesistente.
+    filtered_identity = {}
+    for a_scene, entry in IDENTITY.items():
+        if a_scene not in COUPLES:
+            continue
+        fixed_entry = dict(entry)
+        if fixed_entry.get("transition") not in available_transitions:
+            debug_log(f"[VALIDATE] identity[{a_scene}].transition '{fixed_entry.get('transition')}' "
+                      f"non disponibile, tolta (fallback generico)")
+            fixed_entry.pop("transition", None)
+        if fixed_entry.get("color") not in available_scenes_set:
+            debug_log(f"[VALIDATE] identity[{a_scene}].color '{fixed_entry.get('color')}' "
+                      f"non disponibile, tolta (fallback generico)")
+            fixed_entry.pop("color", None)
+        if fixed_entry.get("wave_kick") not in available_scenes_set:
+            debug_log(f"[VALIDATE] identity[{a_scene}].wave_kick '{fixed_entry.get('wave_kick')}' "
+                      f"non disponibile, tolta (fallback generico)")
+            fixed_entry.pop("wave_kick", None)
+        filtered_identity[a_scene] = fixed_entry
+    IDENTITY = filtered_identity
 
     return {"couples": COUPLES, "couple_transitions": COUPLE_TRANSITIONS, "degenerate": DEGENERATE_MODE,
             "strobe_color_pool": STROBE_COLOR_POOL, "black_pause_enabled": BLACK_PAUSE_PROBABILITY > 0}

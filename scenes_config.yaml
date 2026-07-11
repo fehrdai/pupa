@@ -38,4 +38,23 @@ special_scenes:
 # sceglie uno a caso (stesso colore per tutti i frame di QUELLA raffica, non
 # cambia a meta'). Se alcuni non esistono ancora in OBS, validate_scenes()
 # li toglie automaticamente dal pool.
-strobe_color_pool: [white_master, red_master, blue_master, yellow_master]
+strobe_color_pool: [white_master, red_master, blue_master, yellow_master, green_master]
+
+# IDENTITA' per scena_A: le 8 scene_A si accoppiano naturalmente a 2 a 2 per
+# pool _B condiviso (vedi 'couples' sopra) - ogni coppia condivide una
+# transizione "firma" (usata solo all'ingresso di una nuova coppia_A, non nel
+# ciclo A<->B normale, che resta sulla sua pool in couple_transitions), un
+# colore identitario (usato dal lampo del ciclo 40/30/30, non dal
+# ciclo/stato come STROBE_COLOR_WEIGHTS) e una variante wave_kick dedicata.
+# Se una scena_A non e' qui, o transizione/colore/wave_kick non esistono
+# ancora in OBS, si ricade sui meccanismi generici pre-esistenti (vedi
+# validate_scenes/_get_identity in brain.py).
+identity:
+  urbanfree_A:   {transition: Spiral,       color: red_master,    wave_kick: wave_kick1}
+  segnali_A:     {transition: Spiral,       color: red_master,    wave_kick: wave_kick1}
+  psicodance_A:  {transition: Diaframmatic, color: blue_master,   wave_kick: wave_kick2}
+  strobo_A:      {transition: Diaframmatic, color: blue_master,   wave_kick: wave_kick2}
+  montezuma_A:   {transition: Circles,      color: yellow_master, wave_kick: wave_kick3}
+  futureflash_A: {transition: Circles,      color: yellow_master, wave_kick: wave_kick3}
+  kusanagi_A:    {transition: Fractal,      color: green_master,  wave_kick: wave_kick4}
+  mri_A:         {transition: Fractal,      color: green_master,  wave_kick: wave_kick4}

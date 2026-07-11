@@ -347,11 +347,19 @@ def main():
                     # intercettava - osservato dal vivo (solo 2/20 sostituiti
                     # invece del ~30% atteso).
                     if next_scene == "wave_kick":
-                        # Variante wave_kick (sempre, non probabilistico) -
-                        # mai la stessa due volte di fila se ce n'e' piu' di una.
-                        choices = [v for v in available_wave_kick_variants if v != last_wave_kick_variant[0]] \
-                            or available_wave_kick_variants
-                        next_scene = random.choice(choices)
+                        # Variante wave_kick dedicata alla scena_A corrente (vedi
+                        # IDENTITY in scenes_config.yaml) - stessa ogni volta che
+                        # appare durante il turno di QUELLA scena_A, per rinforzarne
+                        # l'identita'. Fallback alla scelta random anti-repeat se
+                        # la scena_A non ha una variante assegnata (o non ancora
+                        # disponibile in OBS - gia' filtrato da validate_scenes).
+                        identity_variant = brain.get_identity_wave_kick_variant()
+                        if identity_variant and identity_variant in available_wave_kick_variants:
+                            next_scene = identity_variant
+                        else:
+                            choices = [v for v in available_wave_kick_variants if v != last_wave_kick_variant[0]] \
+                                or available_wave_kick_variants
+                            next_scene = random.choice(choices)
                         last_wave_kick_variant[0] = next_scene
 
                         # SPERIMENTALE: ogni tanto ago_talk al posto della variante
@@ -368,6 +376,8 @@ def main():
                         print(f"[CUT BURST] frame -> {trans_type} {trans_ms}ms")
                     elif kick_mode == "overlap":
                         print(f"[SOVRAPPOSIZIONE] -> {trans_type} {trans_ms}ms")
+                    elif kick_mode == "couple_start":
+                        print(f"[CAMBIO COPPIA] firma -> {trans_type} {trans_ms}ms ({next_scene})")
 
                     direction = "B->A" if is_return else "A->B"
                     obs.switch_scene(
