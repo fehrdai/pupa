@@ -380,6 +380,7 @@ class HybridCouplesModel:
         self.last_bass_avg = 0  # Ultima media bass, per calcolare la velocita' del break
         self.last_bpm = 0.0  # Ultimo BPM stimato da audio_analyzer, per l'intervallo strobo agganciato al beat
         self.calm_level = 0  # 0-3, impostato dall'hotkey OBS (vedi CALM_MULTIPLIERS e set_calm_level)
+        self.loop_scene = False  # hotkey OBS: congela il timer 4min sulla scena_A corrente (vedi set_loop_scene)
         self.last_energy_trend = 0  # bass - bass_avg dell'ultimo _update_state, per la raffica di cut
         self.recent_kick_peak_bass = 0  # Massimo kick visto nello stato corrente (per il lampo singolo GROOVE/BUILD)
         self.last_cut_burst_time = 0  # Cooldown tra una raffica di cut e la successiva
@@ -1168,9 +1169,12 @@ class HybridCouplesModel:
             self.bass_at_break_exit = bass
 
         # ====================================================================
-        # 1. TIMER COPPIA SCADUTO? (4 minuti)
+        # 1. TIMER COPPIA SCADUTO? (4 minuti) - saltato se loop_scene attivo
+        # (hotkey OBS: "questa scena_A sta funzionando, non portarmela via" -
+        # il ciclo audio-reattivo interno kick->B/wave_kick/colore prosegue
+        # normalmente, resta congelato solo IL CAMBIO di scena_A).
         # ====================================================================
-        if couple_elapsed > self.COUPLE_DURATION:
+        if couple_elapsed > self.COUPLE_DURATION and not self.loop_scene:
             if current_time - self.meta_couple_start_time > META_COUPLE_DURATION:
                 self._select_new_meta_pair()
                 self.meta_couple_start_time = current_time
@@ -1539,6 +1543,21 @@ def set_calm_level(level):
 def get_calm_level():
     """Livello di CALM MODE corrente (per il print console di pupa.py)."""
     return model.calm_level
+
+def set_loop_scene(enabled, current_time):
+    """Attiva/disattiva il loop sulla scena_A corrente (hotkey OBS: congela
+    il timer dei 4 minuti, il ciclo audio-reattivo interno prosegue normale).
+    Alla DISATTIVAZIONE il timer riparte fresco da questo momento, invece di
+    far scattare un cambio immediato per il tempo accumulato mentre era
+    congelato - stessa logica di force_couple() per un rientro "morbido"."""
+    was_active = model.loop_scene
+    model.loop_scene = enabled
+    if was_active and not enabled:
+        model.couple_start_time = current_time
+
+def get_loop_scene():
+    """True se il loop sulla scena_A corrente e' attivo."""
+    return model.loop_scene
 
 
 _UNIVERSAL_FALLBACK_TRANSITIONS = ["Cut", "Taglio", "Fade", "Dissolvenza"]

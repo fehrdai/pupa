@@ -113,6 +113,12 @@ CALM_LEVEL_SOURCES = {0: "PUPA_CALM_0", 1: "PUPA_CALM_1", 2: "PUPA_CALM_2", 3: "
 CALM_LEVEL_TEXT_SOURCE = "CALM_LEVEL_TEXT"  # indicatore a video, stessa scena, mai in onda
 CALM_POLL_EVERY_N_TICKS = 10  # ~0.5s a 20Hz - un hotkey premuto a mano non serve reattivita' audio-frame
 
+# LOOP SCENA: hotkey OBS Mostra/Nascondi (binario, non 4 livelli come calm
+# mode) per congelare il timer 4min sulla scena_A corrente ("questa sta
+# funzionando, non portarmela via") - vedi brain.set_loop_scene. Stessa
+# scena di servizio di calm mode, stesso schema di risoluzione/polling.
+LOOP_SCENE_SOURCE = "PUPA_LOOP_SCENE"
+
 # ============================================================================
 # SCALE-TO-SOUND — DISATTIVATO DI NUOVO (2026-07-06)
 # ============================================================================
@@ -228,6 +234,19 @@ def main():
     if calm_text_available:
         obs.set_input_text(CALM_LEVEL_TEXT_SOURCE, "CALM: 0")
 
+    # LOOP SCENA: risolvi lo scene_item_id (stessa scena di servizio di
+    # calm mode). Stato di partenza letto subito dopo, cosi' un residuo
+    # da una sessione precedente non genera un falso "appena attivato".
+    loop_scene_item_id = None
+    if CALM_CONTROL_SCENE in scenes:
+        loop_scene_item_id = obs.get_source_item_id(CALM_CONTROL_SCENE, LOOP_SCENE_SOURCE)
+    if loop_scene_item_id is not None:
+        print(f"[PUPA] Loop scena: source di controllo trovata in '{CALM_CONTROL_SCENE}'")
+        loop_scene_prev_enabled = obs.get_scene_item_enabled(CALM_CONTROL_SCENE, loop_scene_item_id)
+    else:
+        print(f"[PUPA] Loop scena: source '{LOOP_SCENE_SOURCE}' non trovata, hotkey disattivato")
+        loop_scene_prev_enabled = False
+
     # Risolvi gli scene_item_id delle sorgenti da scalare a ritmo di musica,
     # e la loro dimensione base (per le sorgenti con "bounds" fisso, es.
     # OBS_BOUNDS_SCALE_INNER: scaleX/scaleY vengono ignorati da OBS in quel
@@ -334,33 +353,46 @@ def main():
             # l'autopulizia lo spegneva subito di nuovo perche' il piu' alto
             # "vinceva" comunque - osservato dal vivo (bloccato su livello 3,
             # F1/F2/F3 senza alcun effetto).
-            if calm_item_ids:
+            if calm_item_ids or loop_scene_item_id is not None:
                 calm_poll_tick += 1
                 if calm_poll_tick >= CALM_POLL_EVERY_N_TICKS:
                     calm_poll_tick = 0
-                    enabled_levels = set(lvl for lvl in calm_item_ids
-                                          if obs.get_scene_item_enabled(CALM_CONTROL_SCENE, calm_item_ids[lvl]))
-                    newly_enabled = enabled_levels - calm_prev_enabled
-                    if newly_enabled:
-                        active_level = max(newly_enabled)
-                    elif enabled_levels:
-                        active_level = max(enabled_levels)  # nessuna pressione nuova, stato invariato
-                    else:
-                        active_level = 0
-                    calm_prev_enabled = {active_level} if enabled_levels else set()
 
-                    if active_level != brain.get_calm_level():
-                        brain.set_calm_level(active_level)
-                        print(f"[CALM MODE] livello -> {active_level}")
-                        debug_log(f"[CALM MODE] livello -> {active_level}")
-                        if calm_text_available:
-                            obs.set_input_text(CALM_LEVEL_TEXT_SOURCE, f"CALM: {active_level}")
+                    if calm_item_ids:
+                        enabled_levels = set(lvl for lvl in calm_item_ids
+                                              if obs.get_scene_item_enabled(CALM_CONTROL_SCENE, calm_item_ids[lvl]))
+                        newly_enabled = enabled_levels - calm_prev_enabled
+                        if newly_enabled:
+                            active_level = max(newly_enabled)
+                        elif enabled_levels:
+                            active_level = max(enabled_levels)  # nessuna pressione nuova, stato invariato
+                        else:
+                            active_level = 0
+                        calm_prev_enabled = {active_level} if enabled_levels else set()
 
-                    # Autopulizia: spegne le altre source rimaste accese,
-                    # cosi' basta il solo hotkey "Mostra" per livello.
-                    for lvl in enabled_levels:
-                        if lvl != active_level:
-                            obs.set_scene_item_enabled(CALM_CONTROL_SCENE, calm_item_ids[lvl], False)
+                        if active_level != brain.get_calm_level():
+                            brain.set_calm_level(active_level)
+                            print(f"[CALM MODE] livello -> {active_level}")
+                            debug_log(f"[CALM MODE] livello -> {active_level}")
+                            if calm_text_available:
+                                obs.set_input_text(CALM_LEVEL_TEXT_SOURCE, f"CALM: {active_level}")
+
+                        # Autopulizia: spegne le altre source rimaste accese,
+                        # cosi' basta il solo hotkey "Mostra" per livello.
+                        for lvl in enabled_levels:
+                            if lvl != active_level:
+                                obs.set_scene_item_enabled(CALM_CONTROL_SCENE, calm_item_ids[lvl], False)
+
+                    # LOOP SCENA: stesso ciclo di polling, ma binario (Mostra/
+                    # Nascondi, non 4 livelli esclusivi) - nessuna autopulizia
+                    # necessaria qui, l'utente controlla ON/OFF direttamente.
+                    if loop_scene_item_id is not None:
+                        loop_enabled = obs.get_scene_item_enabled(CALM_CONTROL_SCENE, loop_scene_item_id)
+                        if loop_enabled != loop_scene_prev_enabled:
+                            loop_scene_prev_enabled = loop_enabled
+                            brain.set_loop_scene(loop_enabled, current_time)
+                            print(f"[LOOP SCENA] {'attivo' if loop_enabled else 'disattivato'}")
+                            debug_log(f"[LOOP SCENA] {'attivo' if loop_enabled else 'disattivato'}")
 
             audio_data = audio.get_metrics()
             
