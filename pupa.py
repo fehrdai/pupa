@@ -210,6 +210,14 @@ def main():
     else:
         print(f"[PUPA] Calm mode: scena '{CALM_CONTROL_SCENE}' non trovata, hotkey disattivati")
 
+    # Stato di partenza per il rilevamento "appena accesa" (vedi loop
+    # principale) - letto una volta all'avvio cosi' non scatta un falso
+    # cambio livello al primo poll per una source gia' accesa da prima.
+    calm_prev_enabled = set(
+        lvl for lvl, item_id in calm_item_ids.items()
+        if obs.get_scene_item_enabled(CALM_CONTROL_SCENE, item_id)
+    )
+
     # Indicatore a video del livello (CALM_LEVEL_TEXT dentro PUPA_Control,
     # mai in onda - "verifica a video di quale stato sia attivo?", visibile
     # solo aprendo l'Anteprima di quella scena in OBS, non sul programma).
@@ -317,15 +325,30 @@ def main():
             current_time = time.time()
 
             # CALM MODE: polling leggero (non ad ogni frame, vedi
-            # CALM_POLL_EVERY_N_TICKS) delle 4 source di controllo - se piu'
-            # di una risulta accesa, vince il livello piu' alto.
+            # CALM_POLL_EVERY_N_TICKS) delle 4 source di controllo. Vince la
+            # source APPENA accesa (differenza rispetto al poll precedente),
+            # non la piu' alta in assoluto - "vince il piu' alto" sembrava
+            # una rete di sicurezza ragionevole, ma con soli hotkey "Mostra"
+            # (mai "Nascondi") impediva di SCENDERE di livello: premendo un
+            # livello piu' basso mentre uno piu' alto era gia' acceso,
+            # l'autopulizia lo spegneva subito di nuovo perche' il piu' alto
+            # "vinceva" comunque - osservato dal vivo (bloccato su livello 3,
+            # F1/F2/F3 senza alcun effetto).
             if calm_item_ids:
                 calm_poll_tick += 1
                 if calm_poll_tick >= CALM_POLL_EVERY_N_TICKS:
                     calm_poll_tick = 0
-                    enabled_levels = [lvl for lvl in sorted(calm_item_ids.keys())
-                                       if obs.get_scene_item_enabled(CALM_CONTROL_SCENE, calm_item_ids[lvl])]
-                    active_level = max(enabled_levels) if enabled_levels else 0
+                    enabled_levels = set(lvl for lvl in calm_item_ids
+                                          if obs.get_scene_item_enabled(CALM_CONTROL_SCENE, calm_item_ids[lvl]))
+                    newly_enabled = enabled_levels - calm_prev_enabled
+                    if newly_enabled:
+                        active_level = max(newly_enabled)
+                    elif enabled_levels:
+                        active_level = max(enabled_levels)  # nessuna pressione nuova, stato invariato
+                    else:
+                        active_level = 0
+                    calm_prev_enabled = {active_level} if enabled_levels else set()
+
                     if active_level != brain.get_calm_level():
                         brain.set_calm_level(active_level)
                         print(f"[CALM MODE] livello -> {active_level}")
@@ -333,13 +356,8 @@ def main():
                         if calm_text_available:
                             obs.set_input_text(CALM_LEVEL_TEXT_SOURCE, f"CALM: {active_level}")
 
-                    # Autopulizia: spegne le altre source rimaste accese -
-                    # osservato dal vivo che con soli hotkey "Mostra"
-                    # assegnati (nessun "Nascondi"), ogni pressione si
-                    # limitava ad ACCENDERE senza mai spegnere la precedente
-                    # (0/1/3 accese insieme) - "vince il piu' alto" mascherava
-                    # il problema ma non si poteva mai SCENDERE di livello.
-                    # Ora basta il solo hotkey "Mostra" per livello.
+                    # Autopulizia: spegne le altre source rimaste accese,
+                    # cosi' basta il solo hotkey "Mostra" per livello.
                     for lvl in enabled_levels:
                         if lvl != active_level:
                             obs.set_scene_item_enabled(CALM_CONTROL_SCENE, calm_item_ids[lvl], False)
