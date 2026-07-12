@@ -223,15 +223,20 @@ BLACK_PAUSE_HOLD = (1.5, 3.5)  # secondi di nero
 # (4 source dedicate, vedi pupa.py) per generi a bassa energia (dub techno,
 # minimal, intro lunghe) dove PUPA non puo' riconoscere il genere da solo -
 # l'unico modo affidabile e' lasciare che sia il VJ a dirlo. Ogni livello e'
-# un moltiplicatore su 4 assi: meno Tagli, Fade/Dissolvenze piu' lente, piu'
-# pausa nera (probabilita' e durata) - "piu' salgo di livello, piu' le
-# transizioni sono lente e morbide" + "aumenterei anche il nero_master".
+# un moltiplicatore su 5 assi: meno Tagli, Fade/Dissolvenze piu' lente, piu'
+# pausa nera (probabilita' e durata), e raffiche strobo DROP/PEAK piu' rare/
+# lente/corte - "piu' salgo di livello, piu' le transizioni sono lente e
+# morbide" + "aumenterei anche il nero_master" + "anche le raffiche di
+# strobo dovrebbero calare (frequenza, velocita' e durata)". "fade" riusato
+# anche per rallentare l'intervallo tra i frame della raffica (stesso
+# concetto: piu' lento/morbido), "burst_len" scala il NUMERO di frame
+# (STROBE_BURST_COUNT), non un tempo - min 1 frame, mai una raffica da zero.
 # Numeri di partenza, da tarare dal vivo come tutto il resto in questo file.
 CALM_MULTIPLIERS = {
-    0: {"cut": 1.0,  "fade": 1.0, "black_prob": 1.0, "black_hold": 1.0},
-    1: {"cut": 0.6,  "fade": 1.3, "black_prob": 1.5, "black_hold": 1.0},
-    2: {"cut": 0.35, "fade": 1.6, "black_prob": 2.0, "black_hold": 1.5},
-    3: {"cut": 0.15, "fade": 2.0, "black_prob": 2.5, "black_hold": 2.0},
+    0: {"cut": 1.0,  "fade": 1.0, "black_prob": 1.0, "black_hold": 1.0, "burst_len": 1.0},
+    1: {"cut": 0.6,  "fade": 1.3, "black_prob": 1.5, "black_hold": 1.0, "burst_len": 0.75},
+    2: {"cut": 0.35, "fade": 1.6, "black_prob": 2.0, "black_hold": 1.5, "burst_len": 0.5},
+    3: {"cut": 0.15, "fade": 2.0, "black_prob": 2.5, "black_hold": 2.0, "burst_len": 0.25},
 }
 CALM_BLACK_PAUSE_PROB_CAP = 0.9  # non deve mai diventare "quasi sempre nero"
 
@@ -1357,11 +1362,12 @@ class HybridCouplesModel:
             # raffiche blu nella stessa sessione, ma il blu restava l'unico
             # colore percepito). Fallback al colore di stato se la scena_A non
             # ha un colore identitario valido (vedi _trigger_strobe/alt_scene).
-            burst_prob = STROBE_BURST_PROBABILITY.get(self.current_state, 0.0)
+            burst_prob = STROBE_BURST_PROBABILITY.get(self.current_state, 0.0) * self._calm("cut")
             if burst_prob > 0 and random.random() < burst_prob:
-                self._trigger_strobe(current_scene, STROBE_BURST_COUNT * 2,
+                calm_burst_count = max(1, round(STROBE_BURST_COUNT * self._calm("burst_len")))
+                self._trigger_strobe(current_scene, calm_burst_count * 2,
                                       alt_scene=self._get_identity().get("color"),
-                                      interval=self._get_strobe_interval())
+                                      interval=self._get_strobe_interval() * self._calm("fade"))
                 return self._advance_burst(current_time, current_scene, logger)
 
             # SOVRAPPOSIZIONE: possibilita' di un peek invece dello switch diretto
