@@ -375,6 +375,19 @@ def main():
                 # DECIDI SUBITO (ogni frame, senza delay)
                 current_scene = obs.get_current_scene()
 
+                # SWITCH SCENE MANUALE: un hotkey OBS nativo ("Passa a
+                # [scena_A]") ha gia' cambiato la scena mostrata - qui
+                # rileviamo lo scarto tra quello che OBS mostra DAVVERO e
+                # quello che brain.py crede attivo, e risincronizziamo invece
+                # di lasciare che PUPA "torni indietro" da solo al prossimo
+                # kick. Solo per vere scene_A (mai per _B/wave_kick/colori,
+                # che PUPA gestisce gia' come parte del proprio ciclo interno).
+                if (current_scene.endswith("_A") and current_scene in brain.COUPLES
+                        and current_scene != brain.get_current_couple_a()):
+                    brain.force_couple(current_scene, current_time)
+                    print(f"[SWITCH SCENE] forzato manualmente -> {current_scene} (timer coppia riavviato)")
+                    debug_log(f"[SWITCH SCENE] forzato manualmente -> {current_scene}")
+
                 # SCALE-TO-SOUND: DISATTIVATO (vedi commento in cima al file).
                 # if current_scene in scale_targets and scale_targets[current_scene]:
                 #     target_scale = _db_to_scale(db_level)

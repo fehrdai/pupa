@@ -450,6 +450,38 @@ class HybridCouplesModel:
         self.couple_history.append(self.current_couple_a)
         self.last_switch_time = current_time
 
+    def force_couple(self, scene_name, current_time):
+        """Risincronizza il modello su una scena_A scelta MANUALMENTE
+        dall'esterno (hotkey OBS nativo "Passa a [scena_A]", non gestito da
+        PUPA - lo switch e' gia' avvenuto in OBS quando questa funzione viene
+        chiamata, qui aggiorniamo solo la CREDENZA interna per non "tornare
+        indietro" da soli al prossimo kick).
+
+        "quando forzi una scena_A a mano, il timer dei 4 minuti per quella
+        coppia riparte da zero" - couple_start_time fresco, nuova scena_B
+        pescata per questa visita. "la finestra colore da 20 minuti invece
+        la lascerei intoccata" - meta_pair/meta_couple_start_time NON toccati.
+        current_state (energia musicale) lasciato invariato: riflette la
+        musica, non la scena, non ha senso resettarlo a INTRO qui.
+
+        Azzera anche eventuali raffiche/sovrapposizioni in corso: dopo uno
+        switch manuale non hanno piu' senso (punterebbero a scene ormai
+        superate)."""
+        self.current_couple_a = scene_name
+        self.in_scene_a = True
+        self.couple_start_time = current_time
+        self.current_b_scene = self._roll_next_b_scene()
+        self.last_switch_time = current_time
+        self.last_transition_is_return = False
+        self.couple_history.append(scene_name)
+
+        self.burst_active = False
+        self.overlap_active = False
+        self.temp_b_scene = None
+        self.temp_b_scene_time = 0
+        self.in_pullback = False
+        self.recent_kick_peak_bass = 0
+
     def _get_identity_duos(self):
         """Raggruppa le scene_A per pool_B condiviso - le 4 coppie-colore
         (vedi IDENTITY/scenes_config.yaml: urbanfree_A+segnali_A=rosso,
@@ -1475,6 +1507,13 @@ def get_transition_info():
 
 def initialize_model(current_scene, current_time):
     model.initialize(current_scene, current_time)
+
+def force_couple(scene_name, current_time):
+    """Risincronizza il modello su una scena_A scelta manualmente da un
+    hotkey OBS nativo - vedi HybridCouplesModel.force_couple. Chiamato da
+    pupa.py quando rileva che la scena_A REALMENTE mostrata in OBS non
+    combacia piu' con quella che il modello crede attiva."""
+    model.force_couple(scene_name, current_time)
 
 def get_identity_wave_kick_variant():
     """Variante wave_kick dedicata alla scena_A corrente (vedi IDENTITY in
