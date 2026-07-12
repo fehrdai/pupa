@@ -101,6 +101,16 @@ WAVE_KICK_VARIANTS = ["wave_kick1", "wave_kick2", "wave_kick3", "wave_kick4"]
 WAVE_KICK_ALT_SCENES = ["ago_talk"]
 WAVE_KICK_ALT_PROBABILITY = 0.3  # 30% delle volte al posto di wave_kick
 
+# CALM MODE: 4 hotkey OBS (Show/Hide di 4 source dedicate, una per livello),
+# per generi a bassa energia (dub techno, minimal, intro lunghe) dove PUPA
+# non puo' riconoscere il genere da solo - vedi CALM_MULTIPLIERS in brain.py.
+# Le 4 source vivono in una scena di servizio mai mostrata sul programma
+# (CALM_CONTROL_SCENE) - se la scena/source non esistono ancora, il polling
+# si disattiva da solo (nessun crash, nessun calm mode finche' non le crei).
+CALM_CONTROL_SCENE = "PUPA_Control"
+CALM_LEVEL_SOURCES = {0: "PUPA_CALM_0", 1: "PUPA_CALM_1", 2: "PUPA_CALM_2", 3: "PUPA_CALM_3"}
+CALM_POLL_EVERY_N_TICKS = 10  # ~0.5s a 20Hz - un hotkey premuto a mano non serve reattivita' audio-frame
+
 # ============================================================================
 # SCALE-TO-SOUND — DISATTIVATO DI NUOVO (2026-07-06)
 # ============================================================================
@@ -180,6 +190,23 @@ def main():
         available_wave_kick_variants = ["wave_kick"]
     print(f"[PUPA] Varianti wave_kick disponibili: {available_wave_kick_variants}")
     last_wave_kick_variant = [None]  # lista per mutabilita' dentro il loop
+
+    # CALM MODE: risolvi gli scene_item_id delle 4 source di controllo (vedi
+    # CALM_LEVEL_SOURCES sopra), una volta sola all'avvio. Se la scena di
+    # servizio non esiste ancora (utente non l'ha ancora creata in OBS), il
+    # polling nel loop principale si disattiva da solo - nessun crash.
+    calm_item_ids = {}
+    if CALM_CONTROL_SCENE in scenes:
+        for level, source_name in CALM_LEVEL_SOURCES.items():
+            item_id = obs.get_source_item_id(CALM_CONTROL_SCENE, source_name)
+            if item_id is not None:
+                calm_item_ids[level] = item_id
+        if calm_item_ids:
+            print(f"[PUPA] Calm mode: {len(calm_item_ids)}/4 source di controllo trovate in '{CALM_CONTROL_SCENE}'")
+        else:
+            print(f"[PUPA] Calm mode: scena '{CALM_CONTROL_SCENE}' trovata ma nessuna source CALM_0-3 al suo interno")
+    else:
+        print(f"[PUPA] Calm mode: scena '{CALM_CONTROL_SCENE}' non trovata, hotkey disattivati")
 
     # Risolvi gli scene_item_id delle sorgenti da scalare a ritmo di musica,
     # e la loro dimensione base (per le sorgenti con "bounds" fisso, es.
@@ -269,12 +296,30 @@ def main():
         obs.switch_scene(starting_couple_a, transition_ms=800, transition_type="Fade")
         current_scene = starting_couple_a
     print(f"[BRAIN] Inizializzato su scena: {current_scene}")
-    
+
     running = True
-    
+    calm_poll_tick = 0
+
     try:
         while running:
             current_time = time.time()
+
+            # CALM MODE: polling leggero (non ad ogni frame, vedi
+            # CALM_POLL_EVERY_N_TICKS) delle 4 source di controllo - se piu'
+            # di una risulta accesa (l'utente ha dimenticato di spegnere
+            # quella precedente), vince il livello piu' alto.
+            if calm_item_ids:
+                calm_poll_tick += 1
+                if calm_poll_tick >= CALM_POLL_EVERY_N_TICKS:
+                    calm_poll_tick = 0
+                    active_level = 0
+                    for level in sorted(calm_item_ids.keys()):
+                        if obs.get_scene_item_enabled(CALM_CONTROL_SCENE, calm_item_ids[level]):
+                            active_level = level
+                    if active_level != brain.get_calm_level():
+                        brain.set_calm_level(active_level)
+                        print(f"[CALM MODE] livello -> {active_level}")
+
             audio_data = audio.get_metrics()
             
             if audio_data:
@@ -300,7 +345,8 @@ def main():
                     event_label += " | CLIP!"
 
                 bpm_label = f" | BPM:{bpm:5.1f}" if bpm > 0 else ""
-                print(f"[AUDIO] B: [{bass_bar:<20}] M: [{mid_bar:<20}] H: [{hi_bar:<20}] dB:{db_level:6.1f}{event_label}{bpm_label}")
+                calm_label = f" | CALM:{brain.get_calm_level()}" if brain.get_calm_level() > 0 else ""
+                print(f"[AUDIO] B: [{bass_bar:<20}] M: [{mid_bar:<20}] H: [{hi_bar:<20}] dB:{db_level:6.1f}{event_label}{bpm_label}{calm_label}")
 
                 # DECIDI SUBITO (ogni frame, senza delay)
                 current_scene = obs.get_current_scene()

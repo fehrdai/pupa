@@ -219,6 +219,22 @@ BLACK_PAUSE_SCENE = SPECIAL_SCENES.get("black", "black_master")
 BLACK_PAUSE_PROBABILITY = 0.20
 BLACK_PAUSE_HOLD = (1.5, 3.5)  # secondi di nero
 
+# CALM MODE: 4 livelli (0=spento, 1-3 crescenti), attivato via hotkey OBS
+# (4 source dedicate, vedi pupa.py) per generi a bassa energia (dub techno,
+# minimal, intro lunghe) dove PUPA non puo' riconoscere il genere da solo -
+# l'unico modo affidabile e' lasciare che sia il VJ a dirlo. Ogni livello e'
+# un moltiplicatore su 4 assi: meno Tagli, Fade/Dissolvenze piu' lente, piu'
+# pausa nera (probabilita' e durata) - "piu' salgo di livello, piu' le
+# transizioni sono lente e morbide" + "aumenterei anche il nero_master".
+# Numeri di partenza, da tarare dal vivo come tutto il resto in questo file.
+CALM_MULTIPLIERS = {
+    0: {"cut": 1.0,  "fade": 1.0, "black_prob": 1.0, "black_hold": 1.0},
+    1: {"cut": 0.6,  "fade": 1.3, "black_prob": 1.5, "black_hold": 1.0},
+    2: {"cut": 0.35, "fade": 1.6, "black_prob": 2.0, "black_hold": 1.5},
+    3: {"cut": 0.15, "fade": 2.0, "black_prob": 2.5, "black_hold": 2.0},
+}
+CALM_BLACK_PAUSE_PROB_CAP = 0.9  # non deve mai diventare "quasi sempre nero"
+
 # Pesi per stato nella scelta del colore di raffica/lampo: nero e bianco
 # SEMPRE dominanti (70% insieme, uguali tra loro), il terzo colore si
 # aggiunge come accento (30%) legato all'energia/genere del momento -
@@ -358,6 +374,7 @@ class HybridCouplesModel:
         self.last_bass = 0  # Ultimo valore bass live, per modulazione continua
         self.last_bass_avg = 0  # Ultima media bass, per calcolare la velocita' del break
         self.last_bpm = 0.0  # Ultimo BPM stimato da audio_analyzer, per l'intervallo strobo agganciato al beat
+        self.calm_level = 0  # 0-3, impostato dall'hotkey OBS (vedi CALM_MULTIPLIERS e set_calm_level)
         self.last_energy_trend = 0  # bass - bass_avg dell'ultimo _update_state, per la raffica di cut
         self.recent_kick_peak_bass = 0  # Massimo kick visto nello stato corrente (per il lampo singolo GROOVE/BUILD)
         self.last_cut_burst_time = 0  # Cooldown tra una raffica di cut e la successiva
@@ -534,6 +551,12 @@ class HybridCouplesModel:
         weight_values = list(available_weighted.values())
         return random.choices(colors, weights=weight_values, k=1)[0]
 
+    def _calm(self, key):
+        """Moltiplicatore CALM MODE per l'asse richiesto ("cut"/"fade"/
+        "black_prob"/"black_hold"), in base a self.calm_level (0-3). Vedi
+        CALM_MULTIPLIERS - livello 0 ritorna sempre 1.0 (nessun effetto)."""
+        return CALM_MULTIPLIERS.get(self.calm_level, CALM_MULTIPLIERS[0])[key]
+
     def _get_strobe_interval(self):
         """Intervallo tra un frame e l'altro di flash/raffica, agganciato al
         beat reale (un sedicesimo, STROBE_BEAT_DIVISOR) quando il BPM e' gia'
@@ -654,11 +677,13 @@ class HybridCouplesModel:
         # peek parziale verso B/A - "manca il nero... troppo illuminata".
         # A differenza del peek normale (blend 40-60%), qui si va al 100%
         # (non ha senso una "mezza pausa nera" semi-trasparente).
-        is_black_pause = random.random() < BLACK_PAUSE_PROBABILITY
+        black_pause_prob = min(CALM_BLACK_PAUSE_PROB_CAP, BLACK_PAUSE_PROBABILITY * self._calm("black_prob"))
+        is_black_pause = random.random() < black_pause_prob
 
         if is_black_pause:
             peek_target_scene = BLACK_PAUSE_SCENE
-            hold_time = random.uniform(*BLACK_PAUSE_HOLD)
+            black_hold_range = tuple(h * self._calm("black_hold") for h in BLACK_PAUSE_HOLD)
+            hold_time = random.uniform(*black_hold_range)
             forward_ms = random.randint(400, 800)
         else:
             # wave_kick coinvolto (in entrata o in ritorno): hold piu' lungo,
@@ -848,7 +873,8 @@ class HybridCouplesModel:
         calma fade lunghi")."""
         bass_factor = min(1.0, max(0.0, self.last_bass / 100.0))
         min_ms, max_ms = FADE_DURATION_RANGE
-        return int(max_ms - bass_factor * (max_ms - min_ms))
+        base_ms = max_ms - bass_factor * (max_ms - min_ms)
+        return int(base_ms * self._calm("fade"))
 
     def _get_fade_ms(self):
         """Ritorna la durata di transizione usata per il display nei log"""
@@ -960,7 +986,7 @@ class HybridCouplesModel:
         # (break brusco -> piu' probabile Taglio veloce; break lento -> Fade)
         if self.current_state == State.BREAK:
             drop_rate = max(0.0, self.last_bass_avg - self.last_bass)
-            cut_prob = min(0.8, drop_rate / 30.0)
+            cut_prob = min(0.8, drop_rate / 30.0) * self._calm("cut")
             if random.random() < cut_prob:
                 trans_type, duration_ms = "Taglio", 300
             else:
@@ -972,7 +998,7 @@ class HybridCouplesModel:
         # sopra), con una probabilita' di Taglio al posto del Fade ("aumentiamo
         # il numero dei cut... anche in groove e intro")
         if self.current_state == State.INTRO:
-            if random.random() < CUT_PROBABILITY_INTRO:
+            if random.random() < CUT_PROBABILITY_INTRO * self._calm("cut"):
                 debug_log(f"[TRANS] INTRO: Taglio 200ms (cut)")
                 return {"type": "Taglio", "duration_ms": 200, "is_return": is_return}
             fade_ms = self._get_fade_duration_ms()
@@ -988,8 +1014,8 @@ class HybridCouplesModel:
         # Modulazione continua sul bass live: piu' energia = piu' veloce e piu' cut,
         # ma mai sotto una soglia minima visibile (150ms)
         bass_factor = min(1.0, max(0.0, self.last_bass / 100.0))
-        duration = max(150, int(base_duration * (1.0 - 0.3 * bass_factor)))
-        cut_prob = min(0.9, base_cut_prob + 0.2 * bass_factor)
+        duration = max(150, int(base_duration * (1.0 - 0.3 * bass_factor) * self._calm("fade")))
+        cut_prob = min(0.9, base_cut_prob + 0.2 * bass_factor) * self._calm("cut")
 
         if random.random() < cut_prob:
             trans_type = "Taglio"
@@ -1301,7 +1327,7 @@ class HybridCouplesModel:
         # valutata una sola volta all'INIZIO del calo, non ad ogni tick per
         # tutta la sua durata (altrimenti a 20Hz un calo di anche solo 200ms
         # ripeterebbe il dado 4 volte, alterando la probabilita' effettiva).
-        cut_burst_prob = CUT_BURST_PROBABILITY.get(self.current_state, 0.0)
+        cut_burst_prob = CUT_BURST_PROBABILITY.get(self.current_state, 0.0) * self._calm("cut")
         is_pullback_now = self.last_energy_trend < CUT_BURST_TREND_THRESHOLD
         if is_pullback_now and not self.in_pullback:
             cooldown_ok = (current_time - self.last_cut_burst_time) >= CUT_BURST_COOLDOWN
@@ -1457,6 +1483,17 @@ def get_current_couple_a():
     combacia da subito con lo stato interno invece di aspettare il primo
     switch organico."""
     return model.current_couple_a
+
+def set_calm_level(level):
+    """Imposta il livello di CALM MODE (0-3, vedi CALM_MULTIPLIERS) -
+    chiamato da pupa.py quando rileva un cambio nell'hotkey OBS dedicato.
+    Clampato a [0,3] per sicurezza (un valore fuori range non deve rompere
+    _calm())."""
+    model.calm_level = max(0, min(3, level))
+
+def get_calm_level():
+    """Livello di CALM MODE corrente (per il print console di pupa.py)."""
+    return model.calm_level
 
 
 _UNIVERSAL_FALLBACK_TRANSITIONS = ["Cut", "Taglio", "Fade", "Dissolvenza"]

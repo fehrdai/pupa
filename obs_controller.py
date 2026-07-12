@@ -205,6 +205,17 @@ class OBSController:
             debug_log(f"[OBS] get_source_item_id fallito ({scene_name}/{source_name}): {e}")
             return None
 
+    def get_scene_item_enabled(self, scene_name, item_id):
+        """Legge lo stato Show/Hide di uno scene item - usato per leggere gli
+        hotkey OBS "a interruttore" (es. CALM MODE: 4 source dedicate,
+        un hotkey Show/Hide ciascuna, PUPA legge quale e' accesa)."""
+        try:
+            resp = self.client.get_scene_item_enabled(scene_name, item_id)
+            return getattr(resp, 'scene_item_enabled', None)
+        except Exception as e:
+            debug_log(f"[OBS] get_scene_item_enabled fallito ({scene_name}/{item_id}): {e}")
+            return None
+
     def get_source_base_size(self, scene_name, item_id):
         """Legge boundsType/boundsWidth/boundsHeight/posizione correnti di uno
         scene item, alla dimensione di riposo (100%, va chiamato UNA VOLTA
