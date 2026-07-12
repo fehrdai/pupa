@@ -216,6 +216,29 @@ class OBSController:
             debug_log(f"[OBS] get_scene_item_enabled fallito ({scene_name}/{item_id}): {e}")
             return None
 
+    def set_scene_item_enabled(self, scene_name, item_id, enabled):
+        """Imposta lo stato Show/Hide di uno scene item - usato per
+        l'autopulizia del CALM MODE (spegne le altre source di livello
+        quando ne rileva una nuova attiva, cosi' basta il solo hotkey
+        "Mostra" per livello, senza dover assegnare anche "Nascondi")."""
+        try:
+            self.client.set_scene_item_enabled(scene_name, item_id, enabled)
+            return True
+        except Exception as e:
+            debug_log(f"[OBS] set_scene_item_enabled fallito ({scene_name}/{item_id}): {e}")
+            return False
+
+    def set_input_text(self, input_name, text):
+        """Aggiorna il campo 'text' di una source testo (text_ft2_source_v2) -
+        usato per l'indicatore a video del livello CALM MODE (CALM_LEVEL_TEXT
+        dentro PUPA_Control, mai in onda - vedi pupa.py)."""
+        try:
+            self.client.set_input_settings(input_name, {"text": text}, overlay=True)
+            return True
+        except Exception as e:
+            debug_log(f"[OBS] set_input_text fallito ({input_name}): {e}")
+            return False
+
     def get_source_base_size(self, scene_name, item_id):
         """Legge boundsType/boundsWidth/boundsHeight/posizione correnti di uno
         scene item, alla dimensione di riposo (100%, va chiamato UNA VOLTA

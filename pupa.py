@@ -15,6 +15,7 @@ from obs_controller import OBSController
 from audio_analyzer import AudioAnalyzer
 import brain
 from logger import setup_logger
+from debug_logger import debug as debug_log
 
 try:
     from secrets_local import OBS_HOST, OBS_PORT, OBS_PASSWORD, AUDIO_DEVICE_NAME
@@ -109,6 +110,7 @@ WAVE_KICK_ALT_PROBABILITY = 0.3  # 30% delle volte al posto di wave_kick
 # si disattiva da solo (nessun crash, nessun calm mode finche' non le crei).
 CALM_CONTROL_SCENE = "PUPA_Control"
 CALM_LEVEL_SOURCES = {0: "PUPA_CALM_0", 1: "PUPA_CALM_1", 2: "PUPA_CALM_2", 3: "PUPA_CALM_3"}
+CALM_LEVEL_TEXT_SOURCE = "CALM_LEVEL_TEXT"  # indicatore a video, stessa scena, mai in onda
 CALM_POLL_EVERY_N_TICKS = 10  # ~0.5s a 20Hz - un hotkey premuto a mano non serve reattivita' audio-frame
 
 # ============================================================================
@@ -208,6 +210,16 @@ def main():
     else:
         print(f"[PUPA] Calm mode: scena '{CALM_CONTROL_SCENE}' non trovata, hotkey disattivati")
 
+    # Indicatore a video del livello (CALM_LEVEL_TEXT dentro PUPA_Control,
+    # mai in onda - "verifica a video di quale stato sia attivo?", visibile
+    # solo aprendo l'Anteprima di quella scena in OBS, non sul programma).
+    calm_text_available = (
+        CALM_CONTROL_SCENE in scenes
+        and obs.get_source_item_id(CALM_CONTROL_SCENE, CALM_LEVEL_TEXT_SOURCE) is not None
+    )
+    if calm_text_available:
+        obs.set_input_text(CALM_LEVEL_TEXT_SOURCE, "CALM: 0")
+
     # Risolvi gli scene_item_id delle sorgenti da scalare a ritmo di musica,
     # e la loro dimensione base (per le sorgenti con "bounds" fisso, es.
     # OBS_BOUNDS_SCALE_INNER: scaleX/scaleY vengono ignorati da OBS in quel
@@ -306,19 +318,31 @@ def main():
 
             # CALM MODE: polling leggero (non ad ogni frame, vedi
             # CALM_POLL_EVERY_N_TICKS) delle 4 source di controllo - se piu'
-            # di una risulta accesa (l'utente ha dimenticato di spegnere
-            # quella precedente), vince il livello piu' alto.
+            # di una risulta accesa, vince il livello piu' alto.
             if calm_item_ids:
                 calm_poll_tick += 1
                 if calm_poll_tick >= CALM_POLL_EVERY_N_TICKS:
                     calm_poll_tick = 0
-                    active_level = 0
-                    for level in sorted(calm_item_ids.keys()):
-                        if obs.get_scene_item_enabled(CALM_CONTROL_SCENE, calm_item_ids[level]):
-                            active_level = level
+                    enabled_levels = [lvl for lvl in sorted(calm_item_ids.keys())
+                                       if obs.get_scene_item_enabled(CALM_CONTROL_SCENE, calm_item_ids[lvl])]
+                    active_level = max(enabled_levels) if enabled_levels else 0
                     if active_level != brain.get_calm_level():
                         brain.set_calm_level(active_level)
                         print(f"[CALM MODE] livello -> {active_level}")
+                        debug_log(f"[CALM MODE] livello -> {active_level}")
+                        if calm_text_available:
+                            obs.set_input_text(CALM_LEVEL_TEXT_SOURCE, f"CALM: {active_level}")
+
+                    # Autopulizia: spegne le altre source rimaste accese -
+                    # osservato dal vivo che con soli hotkey "Mostra"
+                    # assegnati (nessun "Nascondi"), ogni pressione si
+                    # limitava ad ACCENDERE senza mai spegnere la precedente
+                    # (0/1/3 accese insieme) - "vince il piu' alto" mascherava
+                    # il problema ma non si poteva mai SCENDERE di livello.
+                    # Ora basta il solo hotkey "Mostra" per livello.
+                    for lvl in enabled_levels:
+                        if lvl != active_level:
+                            obs.set_scene_item_enabled(CALM_CONTROL_SCENE, calm_item_ids[lvl], False)
 
             audio_data = audio.get_metrics()
             
