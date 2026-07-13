@@ -239,6 +239,18 @@ class OBSController:
             debug_log(f"[OBS] set_input_text fallito ({input_name}): {e}")
             return False
 
+    def get_monitor_list(self):
+        """Lista dei monitor come li vede OBS (monitorIndex, posizione X/Y,
+        dimensioni) - usata per sapere DOVE si trova fisicamente un
+        monitor_index, cosi' da poter identificare le finestre proiettore
+        per posizione invece che per timing (vedi pupa.py)."""
+        try:
+            resp = self.client.get_monitor_list()
+            return resp.monitors
+        except Exception as e:
+            debug_log(f"[OBS] get_monitor_list fallito: {e}")
+            return []
+
     def open_program_projector(self, monitor_index):
         """Apre un Proiettore a schermo intero del PROGRAMMA live sul
         monitor fisico indicato (monitorIndex da get_monitor_list) - usato

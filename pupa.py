@@ -68,17 +68,47 @@ def _wmctrl_env():
     return env
 
 
-def _wmctrl_window_ids():
-    """Lista degli ID finestra attualmente aperte (prima colonna di `wmctrl -l`).
-    Usata per dedurre quale finestra e' NUOVA dopo aver aperto un proiettore -
-    l'API WebSocket di OBS non ritorna l'ID della finestra che apre."""
+def _wmctrl_list_projectors():
+    """Lista (window_id, posizione_x, titolo) di tutte le finestre
+    'Proiettore' aperte in questo momento."""
     import subprocess
     try:
-        result = subprocess.run(["wmctrl", "-l"], capture_output=True, text=True, timeout=3, env=_wmctrl_env())
-        return set(line.split()[0] for line in result.stdout.splitlines() if line.strip())
+        result = subprocess.run(["wmctrl", "-l", "-G"], capture_output=True, text=True, timeout=3, env=_wmctrl_env())
     except Exception as e:
-        debug_log(f"[MONITOR] wmctrl -l fallito: {e}")
-        return set()
+        debug_log(f"[MONITOR] wmctrl -l -G fallito: {e}")
+        return []
+    projectors = []
+    for line in result.stdout.splitlines():
+        parts = line.split(None, 7)
+        if len(parts) < 8 or "Proiettore" not in parts[7]:
+            continue
+        try:
+            projectors.append((parts[0], int(parts[2]), parts[7]))
+        except ValueError:
+            continue
+    return projectors
+
+
+def _find_projector_at(x_position, exclude_window_id, timeout=2.0):
+    """Cerca (con retry fino a `timeout`) una finestra Proiettore posizionata
+    esattamente su x_position, diversa da exclude_window_id.
+
+    Identificazione per POSIZIONE FISICA, non per un diff prima/dopo a tempo
+    fisso: verificato dal vivo che sotto carico reale (musica + PUPA che
+    switcha scene di continuo) OBS puo' impiegare piu' di 150ms a creare la
+    finestra - un timeout fisso troppo corto lasciava la finestra "orfana"
+    (mai piu' tracciata, mai piu' chiudibile), causando un accumulo di
+    decine di finestre fantasma in pochi minuti. Il retry fino a 2s da'
+    margine ampio anche sotto carico, senza bloccare per sempre se qualcosa
+    va storto (ritorna None e il chiamante non perde il riferimento a quella
+    corrente, vedi _set_monitor_output)."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        for win_id, x_pos, _ in _wmctrl_list_projectors():
+            if x_pos == x_position and win_id != exclude_window_id:
+                return win_id
+        time.sleep(0.05)
+    return None
 
 
 def _wmctrl_close(window_id):
@@ -93,23 +123,24 @@ def _wmctrl_close(window_id):
         debug_log(f"[MONITOR] wmctrl -c fallito ({window_id}): {e}")
 
 
-def _set_monitor_output(obs, monitor_index, turn_on, current_window_id, black_scene):
+def _set_monitor_output(obs, monitor_index, monitor_x_position, turn_on, current_window_id, black_scene):
     """Apre il proiettore giusto (Programma se turn_on, sorgente nera se no)
-    sul monitor fisico indicato, poi chiude quello precedente (vedi
-    _wmctrl_close) - ritorna il nuovo window_id da ricordare per il prossimo
-    cambio. Se gia' nello stato giusto E un proiettore e' gia' aperto, il
-    chiamante non richiama questa funzione (vedi loop principale)."""
-    before = _wmctrl_window_ids()
+    sul monitor fisico indicato, poi chiude quello precedente - ritorna il
+    nuovo window_id da ricordare per il prossimo cambio. Se la nuova finestra
+    non si trova entro il timeout (vedi _find_projector_at), NON perde il
+    riferimento a quella corrente (ritorna current_window_id invariato)
+    invece di rischiare di orfanarla."""
     if turn_on:
         obs.open_program_projector(monitor_index)
     else:
         obs.open_scene_projector(black_scene, monitor_index)
 
-    time.sleep(0.15)  # tempo per la nuova finestra di comparire prima di cercarla
-    new_ids = _wmctrl_window_ids() - before
-    new_window_id = new_ids.pop() if new_ids else None
+    new_window_id = _find_projector_at(monitor_x_position, exclude_window_id=current_window_id)
+    if new_window_id is None:
+        debug_log(f"[MONITOR] finestra non trovata entro il timeout (monitor {monitor_index}, x={monitor_x_position})")
+        return current_window_id
 
-    if current_window_id:
+    if current_window_id and current_window_id != new_window_id:
         _wmctrl_close(current_window_id)
 
     return new_window_id
@@ -319,8 +350,22 @@ def main():
     # e prev_state=None forzano l'apertura del primo proiettore al primo
     # giro del loop invece di aspettare un cambio di stato.
     monitor_alternation_enabled = MONITOR_SHOW1_INDEX is not None and MONITOR_SHOW2_INDEX is not None
+    monitor_show1_x = None
+    monitor_show2_x = None
     if monitor_alternation_enabled:
-        print(f"[PUPA] Alternanza monitor: attiva (show1=monitor {MONITOR_SHOW1_INDEX}, show2=monitor {MONITOR_SHOW2_INDEX})")
+        # Posizione X reale dei monitor (per identificare le finestre
+        # proiettore per posizione fisica, non per timing - vedi
+        # _find_projector_at). Se non si trova l'indice, disattiva
+        # l'alternanza invece di rischiare comportamenti indefiniti.
+        monitor_positions = {m.get("monitorIndex"): m.get("monitorPositionX") for m in obs.get_monitor_list()}
+        monitor_show1_x = monitor_positions.get(MONITOR_SHOW1_INDEX)
+        monitor_show2_x = monitor_positions.get(MONITOR_SHOW2_INDEX)
+        if monitor_show1_x is None or monitor_show2_x is None:
+            print(f"[PUPA] Alternanza monitor: indici {MONITOR_SHOW1_INDEX}/{MONITOR_SHOW2_INDEX} non trovati in get_monitor_list(), disattivata")
+            monitor_alternation_enabled = False
+        else:
+            print(f"[PUPA] Alternanza monitor: attiva (show1=monitor {MONITOR_SHOW1_INDEX} x={monitor_show1_x}, "
+                  f"show2=monitor {MONITOR_SHOW2_INDEX} x={monitor_show2_x})")
     monitor_show1_window_id = None
     monitor_show2_window_id = None
     monitor_show1_state = None
@@ -549,13 +594,13 @@ def main():
                     if desired["show1"] != monitor_show1_state:
                         monitor_show1_state = desired["show1"]
                         monitor_show1_window_id = _set_monitor_output(
-                            obs, MONITOR_SHOW1_INDEX, monitor_show1_state,
+                            obs, MONITOR_SHOW1_INDEX, monitor_show1_x, monitor_show1_state,
                             monitor_show1_window_id, MONITOR_BLACK_SCENE
                         )
                     if desired["show2"] != monitor_show2_state:
                         monitor_show2_state = desired["show2"]
                         monitor_show2_window_id = _set_monitor_output(
-                            obs, MONITOR_SHOW2_INDEX, monitor_show2_state,
+                            obs, MONITOR_SHOW2_INDEX, monitor_show2_x, monitor_show2_state,
                             monitor_show2_window_id, MONITOR_BLACK_SCENE
                         )
 
