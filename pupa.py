@@ -59,13 +59,22 @@ except ImportError:
     MONITOR_BLACK_SCENE = None
 
 
+def _wmctrl_env():
+    """Ambiente per le chiamate wmctrl - DISPLAY va impostato esplicitamente,
+    non e' detto sia ereditato (es. sessione SSH pura, senza inoltro X11:
+    verificato dal vivo che senza questo wmctrl non vede nessuna finestra)."""
+    env = dict(os.environ)
+    env.setdefault("DISPLAY", ":0")
+    return env
+
+
 def _wmctrl_window_ids():
     """Lista degli ID finestra attualmente aperte (prima colonna di `wmctrl -l`).
     Usata per dedurre quale finestra e' NUOVA dopo aver aperto un proiettore -
     l'API WebSocket di OBS non ritorna l'ID della finestra che apre."""
     import subprocess
     try:
-        result = subprocess.run(["wmctrl", "-l"], capture_output=True, text=True, timeout=3)
+        result = subprocess.run(["wmctrl", "-l"], capture_output=True, text=True, timeout=3, env=_wmctrl_env())
         return set(line.split()[0] for line in result.stdout.splitlines() if line.strip())
     except Exception as e:
         debug_log(f"[MONITOR] wmctrl -l fallito: {e}")
@@ -79,7 +88,7 @@ def _wmctrl_close(window_id):
     durante un'alternanza che dura ore)."""
     import subprocess
     try:
-        subprocess.run(["wmctrl", "-i", "-c", window_id], timeout=3)
+        subprocess.run(["wmctrl", "-i", "-c", window_id], timeout=3, env=_wmctrl_env())
     except Exception as e:
         debug_log(f"[MONITOR] wmctrl -c fallito ({window_id}): {e}")
 
