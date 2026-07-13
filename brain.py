@@ -240,6 +240,24 @@ CALM_MULTIPLIERS = {
 }
 CALM_BLACK_PAUSE_PROB_CAP = 0.9  # non deve mai diventare "quasi sempre nero"
 
+# ALTERNANZA 2 USCITE MONITOR (setup hardware Linux: 2 uscite show separate,
+# vedi pupa.py/secrets_local.py - assente su Windows). A bassa energia
+# un'uscita accesa e una spenta che si alternano, sempre piu' veloce man
+# mano che la musica cresce - "man mano che la musica cresce, fino ad
+# essere entrambi accesi nel peak": non un'alternanza sempre piu' rapida
+# all'infinito (rischia di leggersi come uno sfarfallio strobo indesiderato),
+# ma una vera CONVERGENZA netta a "entrambe accese" in DROP/PEAK.
+# (min, max) secondi tra un flip e l'altro per stato - bass live interpola
+# dentro il range (piu' energia = piu' vicino al minimo, quindi piu' veloce).
+MONITOR_ALTERNATION_INTERVAL_RANGE = {
+    State.INTRO:  (2.0, 4.0),
+    State.BREAK:  (2.0, 4.0),
+    State.RELAX:  (1.5, 3.0),
+    State.GROOVE: (0.6, 1.5),
+    State.BUILD:  (0.25, 0.8),
+}
+MONITOR_BOTH_ON_STATES = (State.DROP, State.PEAK)
+
 # Pesi per stato nella scelta del colore di raffica/lampo: nero e bianco
 # SEMPRE dominanti (70% insieme, uguali tra loro), il terzo colore si
 # aggiunge come accento (30%) legato all'energia/genere del momento -
@@ -381,6 +399,9 @@ class HybridCouplesModel:
         self.last_bpm = 0.0  # Ultimo BPM stimato da audio_analyzer, per l'intervallo strobo agganciato al beat
         self.calm_level = 0  # 0-3, impostato dall'hotkey OBS (vedi CALM_MULTIPLIERS e set_calm_level)
         self.loop_scene = False  # hotkey OBS: congela il timer 4min sulla scena_A corrente (vedi set_loop_scene)
+
+        self.monitor_show1_on = True  # quale uscita e' "accesa" nell'alternanza (vedi get_monitor_outputs)
+        self.monitor_last_flip_time = 0
         self.last_energy_trend = 0  # bass - bass_avg dell'ultimo _update_state, per la raffica di cut
         self.recent_kick_peak_bass = 0  # Massimo kick visto nello stato corrente (per il lampo singolo GROOVE/BUILD)
         self.last_cut_burst_time = 0  # Cooldown tra una raffica di cut e la successiva
@@ -594,6 +615,28 @@ class HybridCouplesModel:
         "black_prob"/"black_hold"), in base a self.calm_level (0-3). Vedi
         CALM_MULTIPLIERS - livello 0 ritorna sempre 1.0 (nessun effetto)."""
         return CALM_MULTIPLIERS.get(self.calm_level, CALM_MULTIPLIERS[0])[key]
+
+    def get_monitor_outputs(self, current_time):
+        """Decide quale/i delle 2 uscite show mostrare 'accesa' in questo
+        istante - chiamata ad ogni tick da pupa.py (solo Linux, vedi
+        secrets_local.py). A bassa energia alterna una sola uscita per
+        volta (intervallo che si accorcia con l'energia, vedi
+        MONITOR_ALTERNATION_INTERVAL_RANGE), in DROP/PEAK converge su
+        ENTRAMBE accese fisse (non un'alternanza sempre piu' rapida).
+
+        Ritorna {"show1": bool, "show2": bool}."""
+        if self.current_state in MONITOR_BOTH_ON_STATES:
+            return {"show1": True, "show2": True}
+
+        lo, hi = MONITOR_ALTERNATION_INTERVAL_RANGE.get(self.current_state, (2.0, 4.0))
+        bass_factor = min(1.0, max(0.0, self.last_bass / 100.0))
+        interval = hi - bass_factor * (hi - lo)  # piu' energia -> piu' vicino al minimo (piu' veloce)
+
+        if current_time - self.monitor_last_flip_time >= interval:
+            self.monitor_last_flip_time = current_time
+            self.monitor_show1_on = not self.monitor_show1_on
+
+        return {"show1": self.monitor_show1_on, "show2": not self.monitor_show1_on}
 
     def _get_strobe_interval(self):
         """Intervallo tra un frame e l'altro di flash/raffica, agganciato al
@@ -1558,6 +1601,12 @@ def set_loop_scene(enabled, current_time):
 def get_loop_scene():
     """True se il loop sulla scena_A corrente e' attivo."""
     return model.loop_scene
+
+def get_monitor_outputs(current_time):
+    """Quale/i delle 2 uscite show mostrare accesa - vedi
+    HybridCouplesModel.get_monitor_outputs. Chiamato da pupa.py ad ogni
+    tick (solo Linux)."""
+    return model.get_monitor_outputs(current_time)
 
 
 _UNIVERSAL_FALLBACK_TRANSITIONS = ["Cut", "Taglio", "Fade", "Dissolvenza"]

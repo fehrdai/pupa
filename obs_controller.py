@@ -239,6 +239,28 @@ class OBSController:
             debug_log(f"[OBS] set_input_text fallito ({input_name}): {e}")
             return False
 
+    def open_program_projector(self, monitor_index):
+        """Apre un Proiettore a schermo intero del PROGRAMMA live sul
+        monitor fisico indicato (monitorIndex da get_monitor_list) - usato
+        per l'alternanza 2 uscite show ("acceso" = mostra il programma)."""
+        try:
+            self.client.open_video_mix_projector("OBS_WEBSOCKET_VIDEO_MIX_TYPE_PROGRAM", monitor_index)
+            return True
+        except Exception as e:
+            debug_log(f"[OBS] open_program_projector fallito (monitor {monitor_index}): {e}")
+            return False
+
+    def open_scene_projector(self, scene_name, monitor_index):
+        """Apre un Proiettore a schermo intero di una scena specifica
+        (es. black_master) sul monitor fisico indicato - usato per
+        l'alternanza 2 uscite show ("spento" = mostra nero)."""
+        try:
+            self.client.open_source_projector(scene_name, monitor_index)
+            return True
+        except Exception as e:
+            debug_log(f"[OBS] open_scene_projector fallito ({scene_name}, monitor {monitor_index}): {e}")
+            return False
+
     def get_source_base_size(self, scene_name, item_id):
         """Legge boundsType/boundsWidth/boundsHeight/posizione correnti di uno
         scene item, alla dimensione di riposo (100%, va chiamato UNA VOLTA

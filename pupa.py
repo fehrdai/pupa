@@ -47,6 +47,64 @@ try:
 except ImportError:
     AUDIO_INPUT_GAIN_PCT = None
 
+# ALTERNANZA 2 USCITE MONITOR: opzionale, solo sul rig Linux con le 2 uscite
+# show fisiche (vedi brain.get_monitor_outputs). monitorIndex e' quello
+# ritornato da OBS get_monitor_list() - va verificato via WebSocket, non
+# indovinato. Assente su Windows (secrets_local.py li non li definisce).
+try:
+    from secrets_local import MONITOR_SHOW1_INDEX, MONITOR_SHOW2_INDEX, MONITOR_BLACK_SCENE
+except ImportError:
+    MONITOR_SHOW1_INDEX = None
+    MONITOR_SHOW2_INDEX = None
+    MONITOR_BLACK_SCENE = None
+
+
+def _wmctrl_window_ids():
+    """Lista degli ID finestra attualmente aperte (prima colonna di `wmctrl -l`).
+    Usata per dedurre quale finestra e' NUOVA dopo aver aperto un proiettore -
+    l'API WebSocket di OBS non ritorna l'ID della finestra che apre."""
+    import subprocess
+    try:
+        result = subprocess.run(["wmctrl", "-l"], capture_output=True, text=True, timeout=3)
+        return set(line.split()[0] for line in result.stdout.splitlines() if line.strip())
+    except Exception as e:
+        debug_log(f"[MONITOR] wmctrl -l fallito: {e}")
+        return set()
+
+
+def _wmctrl_close(window_id):
+    """Chiude una finestra specifica per ID - necessario perche' l'API OBS
+    non ha un modo per chiudere/sostituire un proiettore gia' aperto, solo
+    per aprirne uno nuovo (che altrimenti si accumulerebbero all'infinito
+    durante un'alternanza che dura ore)."""
+    import subprocess
+    try:
+        subprocess.run(["wmctrl", "-i", "-c", window_id], timeout=3)
+    except Exception as e:
+        debug_log(f"[MONITOR] wmctrl -c fallito ({window_id}): {e}")
+
+
+def _set_monitor_output(obs, monitor_index, turn_on, current_window_id, black_scene):
+    """Apre il proiettore giusto (Programma se turn_on, sorgente nera se no)
+    sul monitor fisico indicato, poi chiude quello precedente (vedi
+    _wmctrl_close) - ritorna il nuovo window_id da ricordare per il prossimo
+    cambio. Se gia' nello stato giusto E un proiettore e' gia' aperto, il
+    chiamante non richiama questa funzione (vedi loop principale)."""
+    before = _wmctrl_window_ids()
+    if turn_on:
+        obs.open_program_projector(monitor_index)
+    else:
+        obs.open_scene_projector(black_scene, monitor_index)
+
+    time.sleep(0.15)  # tempo per la nuova finestra di comparire prima di cercarla
+    new_ids = _wmctrl_window_ids() - before
+    new_window_id = new_ids.pop() if new_ids else None
+
+    if current_window_id:
+        _wmctrl_close(current_window_id)
+
+    return new_window_id
+
 
 def _set_capture_gain(pulse_source, gain_pct):
     """Imposta il gain di cattura via pactl (PipeWire/PulseAudio). Non
@@ -246,6 +304,18 @@ def main():
     else:
         print(f"[PUPA] Loop scena: source '{LOOP_SCENE_SOURCE}' non trovata, hotkey disattivato")
         loop_scene_prev_enabled = False
+
+    # ALTERNANZA 2 USCITE MONITOR: attiva solo se configurata in
+    # secrets_local.py (solo rig Linux, vedi commento sopra). window_id=None
+    # e prev_state=None forzano l'apertura del primo proiettore al primo
+    # giro del loop invece di aspettare un cambio di stato.
+    monitor_alternation_enabled = MONITOR_SHOW1_INDEX is not None and MONITOR_SHOW2_INDEX is not None
+    if monitor_alternation_enabled:
+        print(f"[PUPA] Alternanza monitor: attiva (show1=monitor {MONITOR_SHOW1_INDEX}, show2=monitor {MONITOR_SHOW2_INDEX})")
+    monitor_show1_window_id = None
+    monitor_show2_window_id = None
+    monitor_show1_state = None
+    monitor_show2_state = None
 
     # Risolvi gli scene_item_id delle sorgenti da scalare a ritmo di musica,
     # e la loro dimensione base (per le sorgenti con "bounds" fisso, es.
@@ -459,7 +529,27 @@ def main():
                     current_scene=current_scene,
                     logger=logger
                 )
-                
+
+                # ALTERNANZA 2 USCITE MONITOR: agisce SOLO sul cambio di stato
+                # per ciascuna uscita (non riapre un proiettore identico ad
+                # ogni tick) - vedi _set_monitor_output per il perche' del
+                # tracking window_id (l'API OBS non chiude/sostituisce un
+                # proiettore esistente, solo ne apre uno nuovo).
+                if monitor_alternation_enabled:
+                    desired = brain.get_monitor_outputs(current_time)
+                    if desired["show1"] != monitor_show1_state:
+                        monitor_show1_state = desired["show1"]
+                        monitor_show1_window_id = _set_monitor_output(
+                            obs, MONITOR_SHOW1_INDEX, monitor_show1_state,
+                            monitor_show1_window_id, MONITOR_BLACK_SCENE
+                        )
+                    if desired["show2"] != monitor_show2_state:
+                        monitor_show2_state = desired["show2"]
+                        monitor_show2_window_id = _set_monitor_output(
+                            obs, MONITOR_SHOW2_INDEX, monitor_show2_state,
+                            monitor_show2_window_id, MONITOR_BLACK_SCENE
+                        )
+
                 # Switch (o lampeggio, in MODALITA' DEGENERATA) se necessario.
                 # next_scene is not None (non "next_scene truthy and diverso
                 # da current_scene"): in modalita' degenerata next_scene E'

@@ -26,3 +26,15 @@ AUDIO_DEVICE_NAME = "Microsoft Sound Mapper - Input"
 # (osservato dal vivo: 130% su un ingresso linea produceva un picco di 2.6
 # su una scala che clippa a 1.0).
 # AUDIO_INPUT_GAIN_PCT = 40
+
+# Opzionale, SOLO sul rig con le 2 uscite show fisiche separate (vedi
+# brain.get_monitor_outputs) - alternanza acceso/spento tra le 2 uscite,
+# convergente su "entrambe accese" in DROP/PEAK. monitorIndex va verificato
+# con get_monitor_list() via WebSocket, non indovinato (dipende dall'ordine
+# di enumerazione dei display su quella macchina). MONITOR_BLACK_SCENE e' la
+# scena mostrata quando un'uscita e' "spenta" (es. "black_master"). Richiede
+# `wmctrl` installato (solo Linux/X11) per gestire le finestre proiettore -
+# assente = alternanza disattivata, nessun errore.
+# MONITOR_SHOW1_INDEX = 1
+# MONITOR_SHOW2_INDEX = 2
+# MONITOR_BLACK_SCENE = "black_master"
