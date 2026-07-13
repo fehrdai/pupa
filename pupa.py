@@ -89,24 +89,32 @@ def _wmctrl_list_projectors():
     return projectors
 
 
-def _find_projector_at(x_position, exclude_window_id, timeout=2.0):
-    """Cerca (con retry fino a `timeout`) una finestra Proiettore posizionata
-    esattamente su x_position, diversa da exclude_window_id.
+def _projector_ids_at(x_position):
+    """Set degli ID di tutte le finestre Proiettore attualmente aperte
+    esattamente su x_position."""
+    return set(win_id for win_id, x_pos, _ in _wmctrl_list_projectors() if x_pos == x_position)
 
-    Identificazione per POSIZIONE FISICA, non per un diff prima/dopo a tempo
-    fisso: verificato dal vivo che sotto carico reale (musica + PUPA che
-    switcha scene di continuo) OBS puo' impiegare piu' di 150ms a creare la
-    finestra - un timeout fisso troppo corto lasciava la finestra "orfana"
-    (mai piu' tracciata, mai piu' chiudibile), causando un accumulo di
-    decine di finestre fantasma in pochi minuti. Il retry fino a 2s da'
-    margine ampio anche sotto carico, senza bloccare per sempre se qualcosa
-    va storto (ritorna None e il chiamante non perde il riferimento a quella
-    corrente, vedi _set_monitor_output)."""
+
+def _find_new_projector_at(x_position, before_ids, timeout=2.0):
+    """Cerca (con retry fino a `timeout`) la finestra Proiettore NUOVA in
+    posizione x_position - "nuova" rispetto a before_ids (l'insieme gia'
+    presente PRIMA di aprire il proiettore), non solo "diversa da quella
+    che tracciavamo".
+
+    Escludere solo l'ID tracciato (current_window_id) non bastava: se sulla
+    stessa posizione erano gia' rimaste finestre orfane da un problema
+    precedente (es. un test interrotto), la prima trovata - orfana, non
+    quella appena aperta - veniva "adottata" per sbaglio, lasciando la VERA
+    nuova finestra mai tracciata (osservato dal vivo: la posizione
+    continuava ad accumulare finestre nonostante il tracking sembrasse
+    funzionare). Confrontare contro l'insieme completo PRIMA dell'apertura
+    elimina l'ambiguita' a prescindere da quante finestre orfane ci fossero
+    gia'. Il retry fino a 2s resta per il caso OBS lento sotto carico."""
     deadline = time.time() + timeout
     while time.time() < deadline:
-        for win_id, x_pos, _ in _wmctrl_list_projectors():
-            if x_pos == x_position and win_id != exclude_window_id:
-                return win_id
+        new_ones = _projector_ids_at(x_position) - before_ids
+        if new_ones:
+            return sorted(new_ones)[-1] if len(new_ones) > 1 else next(iter(new_ones))
         time.sleep(0.05)
     return None
 
@@ -125,23 +133,31 @@ def _wmctrl_close(window_id):
 
 def _set_monitor_output(obs, monitor_index, monitor_x_position, turn_on, current_window_id, black_scene):
     """Apre il proiettore giusto (Programma se turn_on, sorgente nera se no)
-    sul monitor fisico indicato, poi chiude quello precedente - ritorna il
-    nuovo window_id da ricordare per il prossimo cambio. Se la nuova finestra
-    non si trova entro il timeout (vedi _find_projector_at), NON perde il
-    riferimento a quella corrente (ritorna current_window_id invariato)
-    invece di rischiare di orfanarla."""
+    sul monitor fisico indicato, poi chiude tutte le altre finestre in
+    quella posizione - ritorna il nuovo window_id da ricordare per il
+    prossimo cambio. Se la nuova finestra non si trova entro il timeout
+    (vedi _find_new_projector_at), NON perde il riferimento a quella
+    corrente (ritorna current_window_id invariato) invece di rischiare di
+    orfanarla.
+
+    Chiude TUTTE le finestre residue in quella posizione (non solo
+    current_window_id): autopulente anche da eventuali orfane accumulate
+    in precedenza (es. da un problema gia' risolto), invece di richiedere
+    una pulizia manuale ogni volta."""
+    before_ids = _projector_ids_at(monitor_x_position)
+
     if turn_on:
         obs.open_program_projector(monitor_index)
     else:
         obs.open_scene_projector(black_scene, monitor_index)
 
-    new_window_id = _find_projector_at(monitor_x_position, exclude_window_id=current_window_id)
+    new_window_id = _find_new_projector_at(monitor_x_position, before_ids)
     if new_window_id is None:
         debug_log(f"[MONITOR] finestra non trovata entro il timeout (monitor {monitor_index}, x={monitor_x_position})")
         return current_window_id
 
-    if current_window_id and current_window_id != new_window_id:
-        _wmctrl_close(current_window_id)
+    for win_id in before_ids:
+        _wmctrl_close(win_id)
 
     return new_window_id
 
