@@ -258,6 +258,16 @@ MONITOR_ALTERNATION_INTERVAL_RANGE = {
 }
 MONITOR_BOTH_ON_STATES = (State.DROP, State.PEAK)
 
+# NOTA (2026-07-14): una pausa-respiro periodica era stata aggiunta qui per
+# ridurre la frequenza delle chiamate wmctrl, quando l'alternanza apriva e
+# chiudeva un proiettore nuovo ad ogni flip (fragile sotto carico, causa di
+# piu' crash di OBS lo stesso giorno). Con la riscrittura a "stacking" di
+# pupa.py (finestre aperte una volta sola, alternanza = portare in primo
+# piano quella giusta - vedi _wmctrl_activate) il costo per flip e' sceso a
+# ~30ms medi anche sotto carico reale (misurato con test_stacking.py: 2249
+# flip/900s, 0 falliti), quindi il problema che la pausa doveva mitigare non
+# c'e' piu' - rimossa per tornare all'alternanza continua originale.
+
 # Pesi per stato nella scelta del colore di raffica/lampo: nero e bianco
 # SEMPRE dominanti (70% insieme, uguali tra loro), il terzo colore si
 # aggiunge come accento (30%) legato all'energia/genere del momento -

@@ -119,47 +119,63 @@ def _find_new_projector_at(x_position, before_ids, timeout=2.0):
     return None
 
 
-def _wmctrl_close(window_id):
-    """Chiude una finestra specifica per ID - necessario perche' l'API OBS
-    non ha un modo per chiudere/sostituire un proiettore gia' aperto, solo
-    per aprirne uno nuovo (che altrimenti si accumulerebbero all'infinito
-    durante un'alternanza che dura ore)."""
+# STACKING (2026-07-14, riscrittura dopo diversi crash live nello stesso
+# giorno con l'approccio precedente): aprire/chiudere un proiettore nuovo ad
+# ogni flip faceva ripetutamente fallire wmctrl sotto carico sostenuto
+# (timeout 3s), lasciando finestre orfane che si accumulavano fino a far
+# collassare OBS (vedi memoria "video_and_monitor_alternation_todo" per la
+# cronologia completa dei tentativi precedenti - pausa-respiro e circuit
+# breaker con pulizia, entrambi rimossi qui perche' non piu' necessari).
+#
+# Sostituito con l'apertura di 2 proiettori sovrapposti per uscita
+# (Programma + black_master, stessa posizione fisica) UNA VOLTA SOLA
+# all'avvio (vedi _open_stacked_projector_pair) - l'alternanza vera e
+# propria e' solo "porta in primo piano quella giusta" (_wmctrl_activate su
+# un ID gia' noto), nessuna apertura/chiusura durante la sessione. Verificato
+# con test_stacking.py sotto carico reale: 2249 flip in 900s, 0 falliti,
+# latenza media 28.7ms (contro i 3000ms di timeout che facevano cedere il
+# vecchio approccio) - inoltre, siccome le finestre non vengono mai chiuse,
+# anche nel caso peggiore (wmctrl che smette di rispondere del tutto) i
+# monitor restano fermi sull'ultimo stato mostrato invece di andare senza
+# segnale, a differenza del vecchio "cleanup" che poteva lasciarli neri.
+MONITOR_ACTIVATE_FAIL_THRESHOLD = 5  # fallimenti consecutivi di wmctrl -i -a prima di mettere in pausa
+MONITOR_ACTIVATE_COOLDOWN = 30.0  # secondi di pausa (le finestre restano comunque aperte/ferme) prima di riprovare
+
+
+def _wmctrl_activate(window_id):
+    """Porta in primo piano una finestra Proiettore GIA' APERTA - nessuna
+    creazione ne' distruzione, e' l'intero meccanismo di alternanza. Vedi
+    commento sopra per i numeri del test dal vivo."""
     import subprocess
     try:
-        subprocess.run(["wmctrl", "-i", "-c", window_id], timeout=3, env=_wmctrl_env())
+        subprocess.run(["wmctrl", "-i", "-a", window_id], timeout=3, env=_wmctrl_env(), capture_output=True)
+        return True
     except Exception as e:
-        debug_log(f"[MONITOR] wmctrl -c fallito ({window_id}): {e}")
+        debug_log(f"[MONITOR] wmctrl -i -a fallito ({window_id}): {e}")
+        return False
 
 
-def _set_monitor_output(obs, monitor_index, monitor_x_position, turn_on, current_window_id, black_scene):
-    """Apre il proiettore giusto (Programma se turn_on, sorgente nera se no)
-    sul monitor fisico indicato, poi chiude tutte le altre finestre in
-    quella posizione - ritorna il nuovo window_id da ricordare per il
-    prossimo cambio. Se la nuova finestra non si trova entro il timeout
-    (vedi _find_new_projector_at), NON perde il riferimento a quella
-    corrente (ritorna current_window_id invariato) invece di rischiare di
-    orfanarla.
+def _open_stacked_projector_pair(obs, monitor_index, x_position, black_scene):
+    """Apre UNA VOLTA SOLA i 2 proiettori sovrapposti (Programma + sorgente
+    black_scene, stessa posizione fisica) per un'uscita show - vedi
+    _wmctrl_activate per come vengono poi alternati. Timeout di rilevazione
+    piu' permissivo (10s) rispetto a quello che serviva per-flip nel vecchio
+    approccio: e' un'apertura UNA TANTUM in fase di avvio, puo' permettersi
+    di aspettare un OBS lento a rispondere. Ritorna (on_id, off_id), o
+    (None, None) se anche con 10s di margine non si riesce a rilevarle."""
+    before = _projector_ids_at(x_position)
+    obs.open_program_projector(monitor_index)
+    on_id = _find_new_projector_at(x_position, before, timeout=10.0)
+    if on_id is None:
+        return None, None
 
-    Chiude TUTTE le finestre residue in quella posizione (non solo
-    current_window_id): autopulente anche da eventuali orfane accumulate
-    in precedenza (es. da un problema gia' risolto), invece di richiedere
-    una pulizia manuale ogni volta."""
-    before_ids = _projector_ids_at(monitor_x_position)
+    before = _projector_ids_at(x_position)
+    obs.open_scene_projector(black_scene, monitor_index)
+    off_id = _find_new_projector_at(x_position, before, timeout=10.0)
+    if off_id is None:
+        return None, None
 
-    if turn_on:
-        obs.open_program_projector(monitor_index)
-    else:
-        obs.open_scene_projector(black_scene, monitor_index)
-
-    new_window_id = _find_new_projector_at(monitor_x_position, before_ids)
-    if new_window_id is None:
-        debug_log(f"[MONITOR] finestra non trovata entro il timeout (monitor {monitor_index}, x={monitor_x_position})")
-        return current_window_id
-
-    for win_id in before_ids:
-        _wmctrl_close(win_id)
-
-    return new_window_id
+    return on_id, off_id
 
 
 def _set_capture_gain(pulse_source, gain_pct):
@@ -362,30 +378,49 @@ def main():
         loop_scene_prev_enabled = False
 
     # ALTERNANZA 2 USCITE MONITOR: attiva solo se configurata in
-    # secrets_local.py (solo rig Linux, vedi commento sopra). window_id=None
-    # e prev_state=None forzano l'apertura del primo proiettore al primo
-    # giro del loop invece di aspettare un cambio di stato.
-    monitor_alternation_enabled = MONITOR_SHOW1_INDEX is not None and MONITOR_SHOW2_INDEX is not None
-    monitor_show1_x = None
-    monitor_show2_x = None
-    if monitor_alternation_enabled:
+    # secrets_local.py (solo rig Linux, vedi commento sopra
+    # _open_stacked_projector_pair per l'architettura a stacking).
+    #
+    # monitor_feature_available: la macchina ha la configurazione giusta
+    # E le 4 finestre (2 per uscita) si sono aperte correttamente all'avvio -
+    # fisso per tutta la sessione. monitor_alternation_enabled: se
+    # l'alternanza sta girando ADESSO - puo' passare a False (troppi
+    # fallimenti di wmctrl -i -a) e tornare True da sola dopo
+    # MONITOR_ACTIVATE_COOLDOWN, vedi nel loop principale.
+    monitor_feature_available = MONITOR_SHOW1_INDEX is not None and MONITOR_SHOW2_INDEX is not None
+    monitor_show1_on_id = monitor_show1_off_id = None
+    monitor_show2_on_id = monitor_show2_off_id = None
+    if monitor_feature_available:
         # Posizione X reale dei monitor (per identificare le finestre
         # proiettore per posizione fisica, non per timing - vedi
-        # _find_projector_at). Se non si trova l'indice, disattiva
+        # _find_new_projector_at). Se non si trova l'indice, disattiva
         # l'alternanza invece di rischiare comportamenti indefiniti.
         monitor_positions = {m.get("monitorIndex"): m.get("monitorPositionX") for m in obs.get_monitor_list()}
         monitor_show1_x = monitor_positions.get(MONITOR_SHOW1_INDEX)
         monitor_show2_x = monitor_positions.get(MONITOR_SHOW2_INDEX)
         if monitor_show1_x is None or monitor_show2_x is None:
             print(f"[PUPA] Alternanza monitor: indici {MONITOR_SHOW1_INDEX}/{MONITOR_SHOW2_INDEX} non trovati in get_monitor_list(), disattivata")
-            monitor_alternation_enabled = False
+            monitor_feature_available = False
         else:
-            print(f"[PUPA] Alternanza monitor: attiva (show1=monitor {MONITOR_SHOW1_INDEX} x={monitor_show1_x}, "
-                  f"show2=monitor {MONITOR_SHOW2_INDEX} x={monitor_show2_x})")
-    monitor_show1_window_id = None
-    monitor_show2_window_id = None
+            print(f"[PUPA] Alternanza monitor: apro le 4 finestre sovrapposte "
+                  f"(show1=monitor {MONITOR_SHOW1_INDEX} x={monitor_show1_x}, show2=monitor {MONITOR_SHOW2_INDEX} x={monitor_show2_x})...")
+            monitor_show1_on_id, monitor_show1_off_id = _open_stacked_projector_pair(
+                obs, MONITOR_SHOW1_INDEX, monitor_show1_x, MONITOR_BLACK_SCENE
+            )
+            monitor_show2_on_id, monitor_show2_off_id = _open_stacked_projector_pair(
+                obs, MONITOR_SHOW2_INDEX, monitor_show2_x, MONITOR_BLACK_SCENE
+            )
+            if None in (monitor_show1_on_id, monitor_show1_off_id, monitor_show2_on_id, monitor_show2_off_id):
+                print("[PUPA] Alternanza monitor: apertura iniziale delle finestre fallita, disattivata")
+                monitor_feature_available = False
+            else:
+                print(f"[PUPA] Alternanza monitor: attiva (show1 on={monitor_show1_on_id} off={monitor_show1_off_id}, "
+                      f"show2 on={monitor_show2_on_id} off={monitor_show2_off_id})")
+    monitor_alternation_enabled = monitor_feature_available
     monitor_show1_state = None
     monitor_show2_state = None
+    monitor_fail_count = 0
+    monitor_pause_until = 0.0
 
     # Risolvi gli scene_item_id delle sorgenti da scalare a ritmo di musica,
     # e la loro dimensione base (per le sorgenti con "bounds" fisso, es.
@@ -600,25 +635,52 @@ def main():
                     logger=logger
                 )
 
-                # ALTERNANZA 2 USCITE MONITOR: agisce SOLO sul cambio di stato
-                # per ciascuna uscita (non riapre un proiettore identico ad
-                # ogni tick) - vedi _set_monitor_output per il perche' del
-                # tracking window_id (l'API OBS non chiude/sostituisce un
-                # proiettore esistente, solo ne apre uno nuovo).
+                # ALTERNANZA 2 USCITE MONITOR: porta in primo piano la
+                # finestra gia' aperta giusta per ciascuna uscita (stacking,
+                # vedi commento sopra _open_stacked_projector_pair) - nessuna
+                # apertura/chiusura durante la sessione.
                 if monitor_alternation_enabled:
                     desired = brain.get_monitor_outputs(current_time)
+                    attempted = False
+                    ok = True
                     if desired["show1"] != monitor_show1_state:
                         monitor_show1_state = desired["show1"]
-                        monitor_show1_window_id = _set_monitor_output(
-                            obs, MONITOR_SHOW1_INDEX, monitor_show1_x, monitor_show1_state,
-                            monitor_show1_window_id, MONITOR_BLACK_SCENE
-                        )
+                        target = monitor_show1_on_id if monitor_show1_state else monitor_show1_off_id
+                        attempted = True
+                        ok = _wmctrl_activate(target) and ok
                     if desired["show2"] != monitor_show2_state:
                         monitor_show2_state = desired["show2"]
-                        monitor_show2_window_id = _set_monitor_output(
-                            obs, MONITOR_SHOW2_INDEX, monitor_show2_x, monitor_show2_state,
-                            monitor_show2_window_id, MONITOR_BLACK_SCENE
-                        )
+                        target = monitor_show2_on_id if monitor_show2_state else monitor_show2_off_id
+                        attempted = True
+                        ok = _wmctrl_activate(target) and ok
+
+                    if attempted:
+                        if ok:
+                            monitor_fail_count = 0
+                        else:
+                            monitor_fail_count += 1
+                            if monitor_fail_count >= MONITOR_ACTIVATE_FAIL_THRESHOLD:
+                                # Le finestre restano comunque aperte e ferme
+                                # sull'ultimo stato mostrato (nessuna verra'
+                                # mai chiusa) - a differenza del vecchio
+                                # approccio, qui non c'e' rischio di monitor
+                                # senza segnale, solo di alternanza ferma.
+                                monitor_alternation_enabled = False
+                                monitor_pause_until = current_time + MONITOR_ACTIVATE_COOLDOWN
+                                monitor_fail_count = 0
+                                msg = (f"[MONITOR] {MONITOR_ACTIVATE_FAIL_THRESHOLD} fallimenti consecutivi - "
+                                       f"alternanza in pausa {MONITOR_ACTIVATE_COOLDOWN:.0f}s")
+                                print(msg)
+                                debug_log(msg)
+
+                elif monitor_feature_available and monitor_pause_until > 0 and current_time >= monitor_pause_until:
+                    monitor_alternation_enabled = True
+                    monitor_pause_until = 0.0
+                    monitor_show1_state = None
+                    monitor_show2_state = None
+                    msg = "[MONITOR] pausa conclusa - alternanza RIATTIVATA"
+                    print(msg)
+                    debug_log(msg)
 
                 # Switch (o lampeggio, in MODALITA' DEGENERATA) se necessario.
                 # next_scene is not None (non "next_scene truthy and diverso
