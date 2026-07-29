@@ -1,0 +1,231 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE Workspace>
+<Workspace xmlns="http://www.qlcplus.org/Workspace" CurrentWindow="VC">
+ <Creator>
+  <Name>Q Light Controller Plus</Name>
+  <Version>5.2.2</Version>
+  <Author>Io</Author>
+ </Creator>
+ <Engine>
+  <InputOutputMap>
+   <BeatGenerator BeatType="Internal" BPM="120"/>
+   <NetworkServer Type="Web" AutoStart="False"/>
+   <Universe Name="Universe 1" ID="0">
+    <Input Plugin="OS2L" Name="OS2L line" UID="" Line="0"/>
+    <Output Plugin="DMX USB" Name="FT232R USB UART (S/N: A50285BI)" UID="" Line="0">
+     <PluginParameters UniverseChannels="14"/>
+    </Output>
+   </Universe>
+   <Universe Name="Universe 2" ID="1"/>
+   <Universe Name="Universe 3" ID="2"/>
+   <Universe Name="Universe 4" ID="3"/>
+  </InputOutputMap>
+  <Fixture>
+   <Manufacturer>Generic</Manufacturer>
+   <Model>Generic</Model>
+   <Mode>7 Channel</Mode>
+   <ID>0</ID>
+   <Name>Generic Dimmer [1]</Name>
+   <Universe>0</Universe>
+   <Address>0</Address>
+   <Channels>7</Channels>
+  </Fixture>
+  <Fixture>
+   <Manufacturer>Generic</Manufacturer>
+   <Model>Generic</Model>
+   <Mode>7 Channel</Mode>
+   <ID>1</ID>
+   <Name>Generic Dimmer [2]</Name>
+   <Universe>0</Universe>
+   <Address>7</Address>
+   <Channels>7</Channels>
+  </Fixture>
+  <Function ID="2" Type="Scene" Name="Strobo">
+   <Speed FadeIn="0" FadeOut="0" Duration="0"/>
+   <FixtureVal ID="0">0,255,1,0,2,0,3,0,4,0,5,0,6,0</FixtureVal>
+   <FixtureVal ID="1">0,255,1,0,2,0,3,0,4,0,5,0,6,0</FixtureVal>
+  </Function>
+  <Function ID="3" Type="Scene" Name="Blackout">
+   <Speed FadeIn="0" FadeOut="0" Duration="0"/>
+   <FixtureVal ID="0"/>
+   <FixtureVal ID="1"/>
+  </Function>
+  <Monitor DisplayMode="0" ShowLabels="0">
+   <Font>Arial,12,-1,5,400,0,0,0,0,0,0,0,0,0,0,1</Font>
+   <ChannelStyle>0</ChannelStyle>
+   <ValueStyle>0</ValueStyle>
+   <Grid Width="5" Height="3" Depth="5" Units="0" POV="1"/>
+   <StageItem>0</StageItem>
+   <FxItem ID="0" XPos="395.239" YPos="1000" ZPos="315.915"/>
+   <FxItem ID="0" Head="1" XPos="745.239" YPos="1000" ZPos="315.915"/>
+   <FxItem ID="0" Head="2" XPos="1095.24" YPos="1000" ZPos="315.915"/>
+   <FxItem ID="0" Head="3" XPos="1445.24" YPos="1000" ZPos="315.915"/>
+   <FxItem ID="0" Head="4" XPos="1795.24" YPos="1000" ZPos="315.915"/>
+   <FxItem ID="0" Head="5" XPos="2145.24" YPos="1000" ZPos="315.915"/>
+   <FxItem ID="0" Head="6" XPos="2495.24" YPos="1000" ZPos="315.915"/>
+   <FxItem ID="1" XPos="496.582" YPos="1000" ZPos="1325.29"/>
+   <FxItem ID="1" Head="1" XPos="846.582" YPos="1000" ZPos="1325.29"/>
+   <FxItem ID="1" Head="2" XPos="1196.58" YPos="1000" ZPos="1325.29"/>
+   <FxItem ID="1" Head="3" XPos="1546.58" YPos="1000" ZPos="1325.29"/>
+   <FxItem ID="1" Head="4" XPos="1896.58" YPos="1000" ZPos="1325.29"/>
+   <FxItem ID="1" Head="5" XPos="2246.58" YPos="1000" ZPos="1325.29"/>
+   <FxItem ID="1" Head="6" XPos="2596.58" YPos="1000" ZPos="1325.29"/>
+  </Monitor>
+ </Engine>
+ <VirtualConsole>
+  <Frame Caption="Pagina 1" ID="0">
+   <Appearance>
+    <Font>Roboto Condensed,16,-1,5,400,0,0,0,0,0,0,0,0,0,0,1</Font>
+   </Appearance>
+   <WindowState Visible="True" X="0" Y="0" Width="1920" Height="1080"/>
+   <AllowResize>False</AllowResize>
+   <ShowHeader>False</ShowHeader>
+   <ShowEnableButton>True</ShowEnableButton>
+   <Collapsed>False</Collapsed>
+   <Disabled>False</Disabled>
+   <Slider Caption="F1_Blue" ID="3" WidgetStyle="Slider" InvertedAppearance="false">
+    <WindowState Visible="True" X="380" Y="141" Width="78" Height="209"/>
+    <Appearance>
+     <BackgroundColor>4282664004</BackgroundColor>
+    </Appearance>
+    <Input ID="0" Universe="0" Channel="12"/>
+    <SliderMode ValueDisplayStyle="Exact">Level</SliderMode>
+    <Level LowLimit="0" HighLimit="255" Value="0">
+     <Channel Fixture="0">3</Channel>
+    </Level>
+   </Slider>
+   <Slider Caption="F1_Red" ID="1" WidgetStyle="Slider" InvertedAppearance="false">
+    <WindowState Visible="True" X="220" Y="141" Width="78" Height="209"/>
+    <Appearance>
+     <BackgroundColor>4282664004</BackgroundColor>
+    </Appearance>
+    <Input ID="0" Universe="0" Channel="10"/>
+    <SliderMode ValueDisplayStyle="Exact">Level</SliderMode>
+    <Level LowLimit="0" HighLimit="255" Value="255">
+     <Channel Fixture="0">1</Channel>
+    </Level>
+   </Slider>
+   <Slider Caption="F1_Master" ID="0" WidgetStyle="Slider" InvertedAppearance="false">
+    <WindowState Visible="True" X="140" Y="141" Width="78" Height="209"/>
+    <Appearance>
+     <BackgroundColor>4282664004</BackgroundColor>
+    </Appearance>
+    <Input ID="0" Universe="0" Channel="13"/>
+    <SliderMode ValueDisplayStyle="Exact">Level</SliderMode>
+    <Level LowLimit="0" HighLimit="255" Value="255">
+     <Channel Fixture="0">0</Channel>
+    </Level>
+   </Slider>
+   <Slider Caption="F1_Green" ID="2" WidgetStyle="Slider" InvertedAppearance="false">
+    <WindowState Visible="True" X="300" Y="141" Width="78" Height="209"/>
+    <Appearance>
+     <BackgroundColor>4282664004</BackgroundColor>
+    </Appearance>
+    <Input ID="0" Universe="0" Channel="11"/>
+    <SliderMode ValueDisplayStyle="Exact">Level</SliderMode>
+    <Level LowLimit="0" HighLimit="255" Value="0">
+     <Channel Fixture="0">2</Channel>
+    </Level>
+   </Slider>
+   <Slider Caption="F2_Master" ID="5" WidgetStyle="Slider" InvertedAppearance="false">
+    <WindowState Visible="True" X="620" Y="141" Width="78" Height="209"/>
+    <Appearance>
+     <BackgroundColor>4282664004</BackgroundColor>
+    </Appearance>
+    <Input ID="0" Universe="0" Channel="18"/>
+    <SliderMode ValueDisplayStyle="Exact">Level</SliderMode>
+    <Level LowLimit="0" HighLimit="255" Value="0">
+     <Channel Fixture="1">0</Channel>
+    </Level>
+   </Slider>
+   <Slider Caption="F2_Blue" ID="8" WidgetStyle="Slider" InvertedAppearance="false">
+    <WindowState Visible="True" X="860" Y="141" Width="78" Height="209"/>
+    <Appearance>
+     <BackgroundColor>4282664004</BackgroundColor>
+    </Appearance>
+    <Input ID="0" Universe="0" Channel="17"/>
+    <SliderMode ValueDisplayStyle="Exact">Level</SliderMode>
+    <Level LowLimit="0" HighLimit="255" Value="0">
+     <Channel Fixture="1">3</Channel>
+    </Level>
+   </Slider>
+   <Slider Caption="F2_Red" ID="6" WidgetStyle="Slider" InvertedAppearance="false">
+    <WindowState Visible="True" X="700" Y="141" Width="78" Height="209"/>
+    <Appearance>
+     <BackgroundColor>4282664004</BackgroundColor>
+    </Appearance>
+    <Input ID="0" Universe="0" Channel="15"/>
+    <SliderMode ValueDisplayStyle="Exact">Level</SliderMode>
+    <Level LowLimit="0" HighLimit="255" Value="0">
+     <Channel Fixture="1">1</Channel>
+    </Level>
+   </Slider>
+   <Slider Caption="F2_Strobe" ID="9" WidgetStyle="Slider" InvertedAppearance="false">
+    <WindowState Visible="True" X="940" Y="141" Width="78" Height="209"/>
+    <Appearance>
+     <BackgroundColor>4282664004</BackgroundColor>
+    </Appearance>
+    <Input ID="0" Universe="0" Channel="19"/>
+    <SliderMode ValueDisplayStyle="Exact">Level</SliderMode>
+    <Level LowLimit="0" HighLimit="251" Value="0">
+     <Channel Fixture="1">4</Channel>
+    </Level>
+   </Slider>
+   <Slider Caption="F2_Green" ID="7" WidgetStyle="Slider" InvertedAppearance="false">
+    <WindowState Visible="True" X="780" Y="141" Width="78" Height="209"/>
+    <Appearance>
+     <BackgroundColor>4282664004</BackgroundColor>
+    </Appearance>
+    <Input ID="0" Universe="0" Channel="16"/>
+    <SliderMode ValueDisplayStyle="Exact">Level</SliderMode>
+    <Level LowLimit="0" HighLimit="255" Value="0">
+     <Channel Fixture="1">2</Channel>
+    </Level>
+   </Slider>
+   <Slider Caption="F1_Strobe" ID="4" WidgetStyle="Slider" InvertedAppearance="false">
+    <WindowState Visible="True" X="460" Y="141" Width="78" Height="209"/>
+    <Appearance>
+     <BackgroundColor>4282664004</BackgroundColor>
+    </Appearance>
+    <Input ID="0" Universe="0" Channel="14"/>
+    <SliderMode ValueDisplayStyle="Exact">Level</SliderMode>
+    <Level LowLimit="0" HighLimit="251" Value="0">
+     <Channel Fixture="0">4</Channel>
+    </Level>
+   </Slider>
+  </Frame>
+  <Frame Caption="Pagina 2" ID="1">
+   <Appearance>
+    <Font>Roboto Condensed,16,-1,5,400,0,0,0,0,0,0,0,0,0,0,1</Font>
+   </Appearance>
+   <WindowState Visible="True" X="0" Y="0" Width="1920" Height="1080"/>
+   <AllowResize>False</AllowResize>
+   <ShowHeader>False</ShowHeader>
+   <ShowEnableButton>True</ShowEnableButton>
+   <Collapsed>False</Collapsed>
+   <Disabled>False</Disabled>
+  </Frame>
+  <Frame Caption="Pagina 3" ID="2">
+   <Appearance>
+    <Font>Roboto Condensed,16,-1,5,400,0,0,0,0,0,0,0,0,0,0,1</Font>
+   </Appearance>
+   <WindowState Visible="True" X="0" Y="0" Width="1920" Height="1080"/>
+   <AllowResize>False</AllowResize>
+   <ShowHeader>False</ShowHeader>
+   <ShowEnableButton>True</ShowEnableButton>
+   <Collapsed>False</Collapsed>
+   <Disabled>False</Disabled>
+  </Frame>
+  <Frame Caption="Pagina 4" ID="3">
+   <Appearance>
+    <Font>Roboto Condensed,16,-1,5,400,0,0,0,0,0,0,0,0,0,0,1</Font>
+   </Appearance>
+   <WindowState Visible="True" X="0" Y="0" Width="1920" Height="1080"/>
+   <AllowResize>False</AllowResize>
+   <ShowHeader>False</ShowHeader>
+   <ShowEnableButton>True</ShowEnableButton>
+   <Collapsed>False</Collapsed>
+   <Disabled>False</Disabled>
+  </Frame>
+ </VirtualConsole>
+</Workspace>

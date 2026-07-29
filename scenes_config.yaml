@@ -1,60 +1,48 @@
-# Configurazione scene/coppie/transizioni di PUPA.
-# Se questo file manca o e' invalido, brain.py usa gli stessi valori come
-# fallback hardcoded (nessuna rottura per chi non lo tocca).
-#
-# All'avvio, pupa.py confronta questa configurazione con le scene e le
-# transizioni REALMENTE presenti nell'installazione OBS collegata, e adatta
-# di conseguenza (scene_B mancanti tolte dal pool, transizioni mancanti
-# sostituite con Cut/Fade nativi OBS, coppie senza scene_A rimosse). Se
-# resta una sola scena in tutto, PUPA lampeggia su quella invece di
-# alternare A/B.
+# scenes_config.yaml - sezioni mancanti generate/integrate automaticamente
+# da PUPA (scene_discovery.py) leggendo la convenzione di denominazione OBS
+# (_A/_B/_kick/_color/_wave). Le sezioni gia' presenti qui sono state
+# rispettate come override - solo quelle assenti sono state riempite.
 
 couples:
-  urbanfree_A:   [spectrumbar_B, radialspike_B]
-  psicodance_A:  [stormlightning_B, ring_B]
-  montezuma_A:   [roundedbar_B, waveform2_B]
-  kusanagi_A:    [waveform1_B, tunnelwave_B]
-  mri_A:         [waveform1_B, tunnelwave_B]
-  futureflash_A: [roundedbar_B, waveform2_B]
-  segnali_A:     [spectrumbar_B, radialspike_B]
-  strobo_A:      [stormlightning_B, ring_B]
-
-couple_transitions:
-  urbanfree_A:   [Blur, Displace]
-  psicodance_A:  [Displace, Burn]
-  montezuma_A:   [Burn, Blur]
-  kusanagi_A:    [Burn, Blur]
-  mri_A:         [Displace, Blur]
-  futureflash_A: [Burn, Displace]
-  segnali_A:     [Burn, Displace]
-  strobo_A:      [Displace, Burn]  # nessuna indicazione data - riuso il pool di psicodance_A (stesso pool_B)
-
-special_scenes:
-  wave_kick: wave_kick
-  strobo: white_master   # rinominata da strobo_B
-  black: black_master
-
-# Pool di colori per la raffica strobo/lampo singolo: ad ogni raffica se ne
-# sceglie uno a caso (stesso colore per tutti i frame di QUELLA raffica, non
-# cambia a meta'). Se alcuni non esistono ancora in OBS, validate_scenes()
-# li toglie automaticamente dal pool.
-strobe_color_pool: [white_master, red_master, blue_master, yellow_master, green_master]
-
-# IDENTITA' per scena_A: le 8 scene_A si accoppiano naturalmente a 2 a 2 per
-# pool _B condiviso (vedi 'couples' sopra) - ogni coppia condivide una
-# transizione "firma" (usata solo all'ingresso di una nuova coppia_A, non nel
-# ciclo A<->B normale, che resta sulla sua pool in couple_transitions), un
-# colore identitario (usato dal lampo del ciclo 40/30/30, non dal
-# ciclo/stato come STROBE_COLOR_WEIGHTS) e una variante wave_kick dedicata.
-# Se una scena_A non e' qui, o transizione/colore/wave_kick non esistono
-# ancora in OBS, si ricade sui meccanismi generici pre-esistenti (vedi
-# validate_scenes/_get_identity in brain.py).
-identity:
-  urbanfree_A:   {transition: Spiral,       color: red_master,    wave_kick: wave_kick1}
-  segnali_A:     {transition: Spiral,       color: red_master,    wave_kick: wave_kick1}
-  psicodance_A:  {transition: Diaframmatic, color: blue_master,   wave_kick: wave_kick3}
-  strobo_A:      {transition: Diaframmatic, color: blue_master,   wave_kick: wave_kick3}
-  montezuma_A:   {transition: Circles,      color: yellow_master, wave_kick: wave_kick2}
-  futureflash_A: {transition: Circles,      color: yellow_master, wave_kick: wave_kick2}
-  kusanagi_A:    {transition: Fractal,      color: green_master,  wave_kick: wave_kick4}
-  mri_A:         {transition: Fractal,      color: green_master,  wave_kick: wave_kick4}
+  kusanagi_A:
+  - strobo_B
+  - parole_B
+  - psicodance_B
+  - segnali_B
+  - urbanfree_B
+  montezuma_A:
+  - strobo_B
+  - parole_B
+  - psicodance_B
+  - segnali_B
+  - urbanfree_B
+  mri_A:
+  - strobo_B
+  - parole_B
+  - psicodance_B
+  - segnali_B
+  - urbanfree_B
+  futureflash_A:
+  - strobo_B
+  - parole_B
+  - psicodance_B
+  - segnali_B
+  - urbanfree_B
+strobe_color_pool:
+- white_color
+- red_color
+- blue_color
+- green_color
+identity_sets:
+- color: red_color
+  waveform: red_wave
+  wave_kick: 4_kick
+  transition: Lightspeed
+- color: blue_color
+  waveform: blue_wave
+  wave_kick: 2_kick
+  transition: Lightspeed
+- color: green_color
+  waveform: green_wave
+  wave_kick: 1_kick
+  transition: Lightspeed

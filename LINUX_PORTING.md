@@ -1,125 +1,75 @@
-# PUPA — Porting a Linux
+# LINUX_PORTING.md — setting up / reconnecting to the Linux show rig
 
-Note pratiche per far girare PUPA su una macchina Linux invece di Windows.
-Scritto dopo una ricognizione della codebase (2026-07-03): il codice Python
-in se' e' gia' portabile (nessun path Windows hardcoded, nessuna API
-Windows-only nei file attivi). I punti che richiedono attenzione sono tutti
-legati alla **cattura audio locale**, non al codice.
+Rewritten 2026-07-17 (previous version, 2026-07-03, predated the dual-OBS-instance setup and the scp-based iteration workflow that's now standard). Update this occasionally — when the deployment workflow itself changes, not every session.
 
-## OBS non e' toccato dal porting
+## Current setup (not "OBS stays on Windows" — that's outdated)
 
-`pupa.py` si connette a OBS via WebSocket su rete (`192.168.1.102:4455`,
-vedi `CONFIG` in `pupa.py`). OBS resta sulla sua macchina Windows attuale —
-il porting riguarda solo dove gira lo SCRIPT Python (`pupa.py`), non OBS
-stesso. Se la macchina Linux e OBS sono sulla stessa rete, non serve
-cambiare nulla in `obs_controller.py`.
+Both machines run PUPA against their **own local OBS instance** — Windows dev box and the Linux live rig (`farefesta@192.168.1.107`, SSH key `~/.ssh/pupa_linux`) each have a full scene collection that must be kept in parity manually (see `OBS_CONFIG.md`). Each machine has its own `secrets_local.py` (gitignored) — Windows connects to itself over its LAN IP, Linux connects to `localhost:4455`.
 
-## Sincronizzazione tra macchine (git)
+## Connecting
 
-Il progetto e' ora su GitHub: https://github.com/fehrdai/pupa.git — questo
-sostituisce la copia manuale della cartella. Flusso normale:
-
-**Prima volta su una macchina nuova (es. Linux):**
 ```bash
-git clone https://github.com/fehrdai/pupa.git
-cd pupa
-cp secrets_local.example.py secrets_local.py
-# poi modifica secrets_local.py con la password vera di OBS
-# (secrets_local.py e' escluso dal repo via .gitignore, va creato a mano
-# su OGNI macchina)
+ssh -i ~/.ssh/pupa_linux farefesta@192.168.1.107
 ```
 
-**Ogni volta che riprendi il lavoro (su qualsiasi macchina):**
+## Iteration workflow (quick edits during a session)
+
+Real day-to-day flow is `scp` + remote compile-check, **not** a full git round-trip for every tweak:
+
 ```bash
-git pull
+scp -i ~/.ssh/pupa_linux brain.py pupa.py farefesta@192.168.1.107:/home/farefesta/Desktop/pupa/
+ssh -i ~/.ssh/pupa_linux farefesta@192.168.1.107 "cd /home/farefesta/Desktop/pupa && python3 -m py_compile brain.py pupa.py && echo COMPILE_OK"
 ```
 
-**Dopo aver fatto modifiche che vuoi salvare/portare sull'altra macchina:**
+Commit to git for durable snapshots (end of a work block, before a show), not for every constant tweak — `git pull` before starting work on a machine, `git push` after, so the two machines don't silently diverge.
+
+## Starting / stopping `pupa.py` remotely
+
 ```bash
-git add -A
-git commit -m "descrizione breve della modifica"
-git push
+# start (background, survives the SSH session ending)
+ssh -i ~/.ssh/pupa_linux farefesta@192.168.1.107 "cd /home/farefesta/Desktop/pupa && nohup python3 pupa.py > /tmp/pupa_stdout.log 2>&1 & disown"
+
+# stop
+ssh -i ~/.ssh/pupa_linux farefesta@192.168.1.107 "pkill -f 'python3 pupa.py'"
+
+# check it's actually running (pgrep -f often false-matches its own invocation)
+ssh -i ~/.ssh/pupa_linux farefesta@192.168.1.107 "ps aux | grep '[p]upa.py'"
 ```
 
-Regola pratica: `git pull` PRIMA di iniziare a modificare codice su una
-macchina, `git push` DOPO aver finito — cosi' le due macchine (Windows di
-sviluppo/test, Linux del live) non divergono mai in silenzio come successo
-la prima volta (modifiche fatte dal vivo su Linux rimaste solo li').
+If Ctrl+C in an interactive terminal doesn't seem to respond, a plain `SIGINT` sent this way works fine — the code's own `KeyboardInterrupt` handler is not the problem; it's usually terminal focus/lag on the operator's side.
 
-## Cosa NON e' nel repo (escluso via .gitignore)
+## System dependencies
 
-- `secrets_local.py` — contiene la password OBS reale, va ricreato a mano
-  su ogni macchina copiando `secrets_local.example.py` (vedi sopra)
-- `python-3.14.6-amd64.exe` — installer Windows, inutile su Linux (su Linux
-  Python si installa via package manager: `apt install python3 python3-pip`
-  o simile)
-- `__pycache__/` — bytecode compilato, si rigenera da solo
-- `debug.log*`, `logs/` — log di sessione, non servono
-- `.claude/settings.local.json` — permessi Claude Code locali alla macchina
-
-## Dipendenze di sistema (prima di pip install)
-
-`sounddevice` si appoggia su PortAudio, che su Linux serve installare a
-livello di sistema (non basta pip):
+`sounddevice` needs PortAudio at the OS level:
 ```bash
 sudo apt install libportaudio2 portaudio19-dev python3-dev
-```
-(nomi pacchetto per Debian/Ubuntu; su altre distro il nome puo' variare,
-es. `portaudio` su Arch/Fedora)
-
-Poi le dipendenze Python (vedi `requirements.txt`, appena creato):
-```bash
 pip install -r requirements.txt
 ```
 
-## Il punto critico: audio_device
+## Audio input
 
-`pupa.py` ha `CONFIG["audio_device"] = 0` con commento "Microsoft Sound
-Mapper - Input" — **questo ID e' specifico di Windows e non ha alcun
-significato su Linux**. Gli ID dei device audio sono enumerati in modo
-completamente diverso tra le due piattaforme (Windows: WASAPI/DirectSound/
-MME; Linux: ALSA/PulseAudio/PipeWire).
-
-**Da fare SEMPRE su ogni nuova macchina (Windows o Linux):**
-```bash
-python list_audio_devices.py
+`secrets_local.py` on Linux uses PulseAudio/PipeWire, not a Windows device index:
+```python
+AUDIO_DEVICE_NAME = "pulse"
+PULSE_SOURCE = "alsa_input.pci-0000_00_1b.0.analog-stereo"  # find via `python list_audio_devices.py`
+AUDIO_INPUT_GAIN_PCT = 40  # capture gain, set via pactl at startup (pupa.py's _set_capture_gain)
 ```
-e aggiornare `CONFIG["audio_device"]` in `pupa.py` col numero corretto per
-quella macchina specifica — non assumere che "0" funzioni su Linux.
+Linux has no "Stereo Mix" — the equivalent is a PulseAudio/PipeWire "Monitor" source (`*.monitor`), already what `list_audio_devices.py` looks for.
 
-## Niente "Stereo Mix" su Linux
+## Monitor alternation (2 physical show outputs)
 
-Su Windows, `list_audio_devices.py` cerca device con "Stereo Mix" o
-"Loopback" nel nome — e' il modo standard Windows di catturare l'audio che
-sta suonando sul sistema (non un microfono fisico). **Linux non ha
-"Stereo Mix"**: l'equivalente e' un device "Monitor" esposto da
-PulseAudio/PipeWire (es. "Monitor of Built-in Audio Analog Stereo", o
-"alsa_output.XXX.monitor"). Ho aggiornato `list_audio_devices.py` per
-evidenziare anche questi.
-
-Se sulla macchina Linux non appare nessun device "Monitor", potrebbe
-servire abilitarlo esplicitamente:
-```bash
-pactl load-module module-loopback  # PulseAudio, se serve un loopback esplicito
+`secrets_local.py` on Linux also carries the physical monitor mapping — **verify with `get_monitor_list()` on this specific machine, don't assume it matches another rig**:
+```python
+MONITOR_SHOW1_INDEX = 1  # e.g. DisplayPort-0
+MONITOR_SHOW2_INDEX = 2  # e.g. HDMI-A-0
+MONITOR_BLACK_SCENE = "black_master"
 ```
-oppure verificare che PipeWire/PulseAudio esponga il monitor del sink di
-output che si vuole catturare (di solito e' gia' presente di default).
+Requires `wmctrl` for the projector-raising mechanism (see `OBS_CONFIG.md`/`PUPA_ARCHITECTURE.md`) — `sudo apt install wmctrl` if missing.
 
-## Percorsi file
+## Cross-machine audio test rig (Windows → Linux, for remote dev without being at the venue)
 
-`logger.py` e `debug_logger.py` scrivono log con path relativi
-(`logs/pupa.log`, `debug.log`) usando forward slash — funzionano
-correttamente sia su Windows sia su Linux senza modifiche.
+Windows' audio output is physically cabled into this machine's line-in, so whatever plays on the Windows dev box acts as "live music" for testing PUPA on Linux remotely. Needs, on Windows: VB-Cable routed correctly (default playback → CABLE Input, `pupa.py` reads CABLE Output) **and** `audio_bridge.py` running (`python audio_bridge.py`, background) to bridge CABLE Output to the physical output wired to Linux — this bypasses a broken native Windows "Listen" loopback for that specific device (regressed after a Windows Update, 2026-07-16). Full detail and troubleshooting history in the `project_windows_linux_audio_test_wiring` memory note (not in this repo — ask if it needs pulling into a doc here).
 
-## Checklist riassuntiva
+## What's NOT in the repo (`.gitignore`)
 
-- [ ] `git clone https://github.com/fehrdai/pupa.git`
-- [ ] `cp secrets_local.example.py secrets_local.py` e inserire la password OBS vera
-- [ ] `sudo apt install libportaudio2 portaudio19-dev python3-dev`
-- [ ] `pip install -r requirements.txt`
-- [ ] `python list_audio_devices.py` — trovare il device giusto (cercare un
-      "Monitor" per catturare l'audio di sistema, non un microfono)
-- [ ] Aggiornare `CONFIG["audio_device"]` in `pupa.py` col numero trovato
-- [ ] `python test_obs.py` — verificare che la connessione OBS remota funzioni
-      ancora (dovrebbe, essendo via rete)
-- [ ] `python pupa.py` — avvio vero e proprio
+`secrets_local.py`, `logs/`, `debug.log*`, `audio_levels.log*`, `__pycache__/`, `.claude/`.

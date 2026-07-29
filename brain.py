@@ -9,6 +9,7 @@ PUPA Brain Module - v0.6 Unified Energy-Reactive Model
   soglia minima visibile)
 """
 
+import math
 import random
 import time
 import os
@@ -21,6 +22,8 @@ try:
     import yaml
 except ImportError:
     yaml = None
+
+import scene_discovery as sd
 
 class State(Enum):
     """7 stati della macchina musicale"""
@@ -37,40 +40,48 @@ class State(Enum):
 # possibili (COUPLES_CONFIG.yaml esisteva ma non era mai stato caricato,
 # vedi CLAUDE.md); ora sono anche il fallback di sicurezza del file YAML.
 _DEFAULT_COUPLES = {
-    "urbanfree_A":   ["spectrumbar_B", "tunnelwave_B"],
-    "psicodance_A":  ["stormlightning_B", "waveform1_B"],
-    "montezuma_A":   ["roundedbar_B", "waveform2_B"],
-    "kusanagi_A":    ["radialspike_B", "stormlightning_B"],
-    "mri_A":         ["waveform1_B", "ring_B"],
-    "futureflash_A": ["roundedbar_B", "waveform2_B"],
-    "segnali_A":     ["spectrumbar_B", "ring_B"],
-    "strobo_A":      ["stormlightning_B", "ring_B"],
+    "futureflash_A": ["urbanfree_B"],
+    "kusanagi_A":    ["strobo_B"],
+    "montezuma_A":   ["psicodance_B"],
+    "mri_A":         ["segnali_B"],
 }
+# POOL CONDIVISO (2026-07-?? Fase 2, operatore): stesso pool per OGNI
+# scena_A invece di pool dedicati diversi per coppia - stessa filosofia
+# gia' usata per ALL_B_SCENES/STROBE_COLOR_POOL, non piu' una curatela
+# per-coppia. Fractal/Plasma non sono piu' firme d'identita' esclusive
+# (vedi _DEFAULT_IDENTITY_SETS sotto), Digital Gltch entra qui invece di
+# essere solo per l'ingresso wave_kick (che ora riusa questo stesso pool).
+_SHARED_COUPLE_TRANSITIONS_POOL = ["Burn", "Displace", "Digital Gltch", "Plasma", "Blur"]
 _DEFAULT_COUPLE_TRANSITIONS = {
-    "urbanfree_A": ["Blur", "Displace"],
-    "psicodance_A": ["Displace", "Burn"],
-    "montezuma_A": ["Burn", "Blur"],
-    "kusanagi_A": ["Burn", "Blur"],
-    "mri_A": ["Displace", "Blur"],
-    "futureflash_A": ["Burn", "Displace"],
-    "segnali_A": ["Burn", "Displace"],
-    "strobo_A": ["Displace", "Burn"],
+    "montezuma_A": list(_SHARED_COUPLE_TRANSITIONS_POOL),
+    "kusanagi_A": list(_SHARED_COUPLE_TRANSITIONS_POOL),
+    "mri_A": list(_SHARED_COUPLE_TRANSITIONS_POOL),
+    "futureflash_A": list(_SHARED_COUPLE_TRANSITIONS_POOL),
 }
-_DEFAULT_SPECIAL_SCENES = {"wave_kick": "wave_kick", "strobo": "white_master", "black": "black_master"}
-_DEFAULT_STROBE_COLOR_POOL = ["white_master", "red_master", "blue_master", "yellow_master", "green_master"]
-# IDENTITA' per scena_A (vedi scenes_config.yaml per la spiegazione): transizione
-# "firma" di ingresso coppia, colore identitario del lampo 40/30/30, variante
-# wave_kick dedicata. Le 8 scene_A si accoppiano 2 a 2 per pool _B condiviso.
-_DEFAULT_IDENTITY = {
-    "urbanfree_A":   {"transition": "Spiral",       "color": "red_master",    "wave_kick": "wave_kick1"},
-    "segnali_A":     {"transition": "Spiral",       "color": "red_master",    "wave_kick": "wave_kick1"},
-    "psicodance_A":  {"transition": "Diaframmatic", "color": "blue_master",   "wave_kick": "wave_kick3"},
-    "strobo_A":      {"transition": "Diaframmatic", "color": "blue_master",   "wave_kick": "wave_kick3"},
-    "montezuma_A":   {"transition": "Circles",      "color": "yellow_master", "wave_kick": "wave_kick2"},
-    "futureflash_A": {"transition": "Circles",      "color": "yellow_master", "wave_kick": "wave_kick2"},
-    "kusanagi_A":    {"transition": "Fractal",      "color": "green_master",  "wave_kick": "wave_kick4"},
-    "mri_A":         {"transition": "Fractal",      "color": "green_master",  "wave_kick": "wave_kick4"},
-}
+_DEFAULT_SPECIAL_SCENES = {"wave_kick": "wave_kick", "strobo": "white_color", "black": "black_color"}
+_DEFAULT_STROBE_COLOR_POOL = ["white_color", "red_color", "blue_color", "green_color"]
+# IDENTITA' (vedi scenes_config.yaml per la spiegazione): bundle fissi
+# (transizione firma + colore + variante kick + waveform), SLEGATI dalle
+# scene_A - ruotano in modo indipendente (vedi self.identity_shuffle_bag),
+# non piu' un abbinamento fisso scena_A -> identita'.
+_DEFAULT_IDENTITY_SETS = [
+    # 2026-07-29 (operatore): giallo eliminato, solo RGB puri (rosso/verde/
+    # blu) - bianco riservato allo strobo, non e' una identita' che ruota.
+    # Lightspeed resta firma UNICA per tutte.
+    {"transition": "Lightspeed", "color": "red_color",   "wave_kick": "kick1", "waveform": "red_wave"},
+    {"transition": "Lightspeed", "color": "blue_color",  "wave_kick": "kick3", "waveform": "blue_wave"},
+    {"transition": "Lightspeed", "color": "green_color", "wave_kick": "kick4", "waveform": "green_wave"},
+]
+# META-COPPIE (RIPRISTINATO 2026-07-21 - vedi _get_identity_duos): 2 coppie
+# FISSE di scene_A, non piu' derivate dal pool_B condiviso (quel calcolo
+# smise di avere senso quando la ristrutturazione 2026-07-15 diede ad ogni
+# scena_A un pool_B dedicato univoco - ogni "duo" finiva per avere 1 sola
+# scena_A, bloccando la finestra di META_COUPLE_DURATION su una sola
+# scena_A per l'intera finestra invece di alternarne 2).
+_DEFAULT_META_PAIR_DUOS = [
+    ["futureflash_A", "kusanagi_A"],
+    ["montezuma_A", "mri_A"],
+]
 
 SCENES_CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scenes_config.yaml")
 
@@ -81,7 +92,8 @@ def _load_scenes_config(path=SCENES_CONFIG_PATH):
     e' invalido, o pyyaml non e' installato - nessuna rottura per chi non lo tocca."""
     defaults = (dict(_DEFAULT_COUPLES), dict(_DEFAULT_COUPLE_TRANSITIONS),
                 dict(_DEFAULT_SPECIAL_SCENES), list(_DEFAULT_STROBE_COLOR_POOL),
-                dict(_DEFAULT_IDENTITY))
+                [dict(s) for s in _DEFAULT_IDENTITY_SETS],
+                [list(d) for d in _DEFAULT_META_PAIR_DUOS])
     if yaml is None:
         debug_log("[CONFIG] pyyaml non disponibile, uso valori hardcoded")
         return defaults
@@ -92,9 +104,10 @@ def _load_scenes_config(path=SCENES_CONFIG_PATH):
         transitions = data.get("couple_transitions") or _DEFAULT_COUPLE_TRANSITIONS
         special = data.get("special_scenes") or _DEFAULT_SPECIAL_SCENES
         color_pool = data.get("strobe_color_pool") or _DEFAULT_STROBE_COLOR_POOL
-        identity = data.get("identity") or _DEFAULT_IDENTITY
+        identity_sets = data.get("identity_sets") or _DEFAULT_IDENTITY_SETS
+        meta_pair_duos = data.get("meta_pair_duos") or _DEFAULT_META_PAIR_DUOS
         debug_log(f"[CONFIG] scenes_config.yaml caricato: {len(couples)} coppie")
-        return couples, transitions, special, color_pool, identity
+        return couples, transitions, special, color_pool, identity_sets, meta_pair_duos
     except FileNotFoundError:
         debug_log(f"[CONFIG] {path} non trovato, uso valori hardcoded")
         return defaults
@@ -107,7 +120,151 @@ def _load_scenes_config(path=SCENES_CONFIG_PATH):
 # Caricato da scenes_config.yaml (vedi _load_scenes_config), con fallback
 # hardcoded. Filtrato poi da validate_scenes() contro le scene REALMENTE
 # presenti in OBS - vedi sotto.
-COUPLES, COUPLE_TRANSITIONS, SPECIAL_SCENES, STROBE_COLOR_POOL, IDENTITY = _load_scenes_config()
+COUPLES, COUPLE_TRANSITIONS, SPECIAL_SCENES, STROBE_COLOR_POOL, IDENTITY_SETS, META_PAIR_DUOS = _load_scenes_config()
+
+# POOL CONDIVISO di tutte le scene_B (ristrutturazione 2026-07-15: prima
+# ogni scena_A pescava SOLO dal proprio pool in COUPLES, ora _select_b_scene
+# pesca da QUESTO pool comune a tutte le coppie - stessa filosofia di
+# disaccoppiamento gia' usata per IDENTITY_SETS, per piu' varieta' nel tempo.
+# COUPLES resta invariato e serve ancora per la VALIDAZIONE (una scena_A e'
+# valida solo se il SUO pool ha almeno una _B reale in OBS) - ricalcolato
+# anche dentro validate_scenes() dopo il filtraggio.
+def _compute_all_b_scenes():
+    seen = []
+    for pool in COUPLES.values():
+        for b in pool:
+            if b not in seen:
+                seen.append(b)
+    return seen
+
+
+ALL_B_SCENES = _compute_all_b_scenes()
+
+
+def discover_and_merge_config(available_scenes, all_inputs, scene_item_names, path=SCENES_CONFIG_PATH):
+    """Riempie le sezioni MANCANTI di scenes_config.yaml (couples,
+    strobe_color_pool, identity_sets) scoprendole dalla convenzione di
+    denominazione OBS (vedi scene_discovery.py: _A/_B/_kick/_color/_wave),
+    lasciando intatta ogni sezione gia' presente nel file - "il config vince
+    se c'e', altrimenti si scopre". Scrive il risultato su disco cosi'
+    scenes_config.yaml diventa un artefatto GENERATO/ispezionabile (obiettivo
+    esplicito dell'operatore: "il file popolato da pupa quando si interfaccia
+    con OBS"), non solo un file da editare a mano.
+
+    Va chiamata da pupa.py DOPO la connessione a OBS (serve la lista scene/
+    input reale) e PRIMA di validate_scenes() (che poi filtra/degrada come
+    sempre). Ricarica e riassegna i globals del modulo dal file appena
+    scritto, cosi' la sessione corrente usa gia' quanto scoperto.
+
+    available_scenes: lista nomi scena (obs.cache_scenes()).
+    all_inputs: obs.get_all_inputs() - per riconoscere slide/colore per KIND,
+        non per nome.
+    scene_item_names: {nome_scena: [nomi sorgenti nidificate]} per ogni
+        scena _A/_B scoperta - obs.get_scene_item_source_names(scena) per
+        ciascuna, serve solo al riconoscimento slide qui.
+
+    Ritorna la lista delle scene_A/_B riconosciute come slide per CONTENUTO
+    (sorgente di kind 'slideshow', qualunque nome) - non scritta su disco,
+    ricalcolata ad ogni avvio dal contenuto reale, non e' una curatela."""
+    raw = {}
+    if yaml is not None:
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                raw = yaml.safe_load(f) or {}
+        except FileNotFoundError:
+            raw = {}
+        except Exception as e:
+            debug_log(f"[CONFIG] {path} illeggibile per la scoperta ({e}), riparto da vuoto")
+            raw = {}
+
+    changed = False
+
+    if not raw.get("couples"):
+        raw["couples"] = sd.discover_couples(available_scenes)
+        changed = True
+        debug_log(f"[DISCOVERY] couples scoperte: {raw['couples']}")
+
+    color_scenes = sd.discover_color_scenes(available_scenes)
+    non_black_colors = [c for c in color_scenes if c != sd.BLACK_COLOR_SCENE]
+
+    if not raw.get("strobe_color_pool"):
+        raw["strobe_color_pool"] = list(non_black_colors)
+        changed = True
+        debug_log(f"[DISCOVERY] strobe_color_pool scoperto: {raw['strobe_color_pool']}")
+
+    if not raw.get("identity_sets"):
+        # Un colore diventa una vera IDENTITA' (bundle color+waveform+kick
+        # che viaggiano insieme) solo se ha una scena _wave omonima - questo
+        # e' il segnale di contenuto che lo distingue da un colore
+        # puramente utility/accento (es. white_color, usato solo per lo
+        # strobo - niente "white_wave" in questa convenzione). Evita di
+        # dover escludere "white"/"black" per nome, che sarebbe di nuovo un
+        # hardcode - qui il criterio e' "ha un waveform abbinato", non "non
+        # e' nero".
+        wave_scenes = set(sd.discover_wave_scenes(available_scenes))
+        kick_scenes = sd.discover_kick_scenes(available_scenes)
+        identity_colors = []
+        for color in non_black_colors:
+            base = color[: -len("_color")]
+            if f"{base}_wave" in wave_scenes:
+                identity_colors.append((color, f"{base}_wave"))
+        if identity_colors:
+            identity_sets = []
+            for i, (color, waveform) in enumerate(identity_colors):
+                entry = {"color": color, "waveform": waveform}
+                if kick_scenes:
+                    entry["wave_kick"] = kick_scenes[i % len(kick_scenes)]
+                identity_sets.append(entry)
+            raw["identity_sets"] = identity_sets
+            changed = True
+        debug_log(f"[DISCOVERY] identity_sets scoperti: {identity_sets}")
+
+    if not sd.has_black_color(color_scenes):
+        print(f"[PUPA] ATTENZIONE: nessuna scena '{sd.BLACK_COLOR_SCENE}' trovata in OBS - "
+              f"i flash colorati e lo strobo bianco saranno sostituiti dal nero.")
+        debug_log(f"[CONFIG] {sd.BLACK_COLOR_SCENE} assente - fallback al nero attivo per flash/strobo")
+
+    if changed and yaml is not None:
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(
+                    "# scenes_config.yaml - sezioni mancanti generate/integrate automaticamente\n"
+                    "# da PUPA (scene_discovery.py) leggendo la convenzione di denominazione OBS\n"
+                    "# (_A/_B/_kick/_color/_wave). Le sezioni gia' presenti qui sono state\n"
+                    "# rispettate come override - solo quelle assenti sono state riempite.\n\n"
+                )
+                yaml.safe_dump(raw, f, allow_unicode=True, sort_keys=False)
+            debug_log(f"[CONFIG] {path} aggiornato con le sezioni scoperte da OBS")
+        except Exception as e:
+            debug_log(f"[CONFIG] scrittura di {path} fallita: {e}")
+
+    global COUPLES, COUPLE_TRANSITIONS, SPECIAL_SCENES, STROBE_COLOR_POOL, IDENTITY_SETS, META_PAIR_DUOS
+    global ALL_B_SCENES, STROBE_SCENE, BLACK_PAUSE_SCENE
+    COUPLES, COUPLE_TRANSITIONS, SPECIAL_SCENES, STROBE_COLOR_POOL, IDENTITY_SETS, META_PAIR_DUOS = _load_scenes_config(path)
+    ALL_B_SCENES = _compute_all_b_scenes()
+    STROBE_SCENE = SPECIAL_SCENES.get("strobo", "white_color")
+    BLACK_PAUSE_SCENE = SPECIAL_SCENES.get("black", "black_color")
+
+    slide_input_names = sd.slideshow_input_names(all_inputs)
+    slide_scenes = [
+        scene for scene, items in scene_item_names.items()
+        if sd.is_slide_scene(items, slide_input_names)
+    ]
+    return slide_scenes
+
+
+# TEST TEMPORANEO 2026-07-17 - "ho bisogno di testarla in azione nella
+# logica di pupa per sapere se funziona" (slideshow "slide"): se valorizzato,
+# forza OGNI rotazione di coppia a scegliere questa scena_B invece della
+# normale pescata dal pool (~1/5 di probabilita' altrimenti) - cosi' si vede
+# entrare in gioco ripetutamente in pochi minuti invece di aspettare la
+# fortuna. Test 2026-07-17 CONFERMATO FUNZIONANTE (dopo aver corretto un
+# percorso immagini non piu' valido in OBS, causa reale del "non si vede" -
+# vedi [[project_color_overlay_and_slideshow]]). Rimesso a None per tornare
+# al funzionamento normale (pescata dal pool intero) - riattivare mettendo
+# il nome di una scena_B per un futuro test mirato, senza doverlo
+# reimplementare da zero.
+DEBUG_FORCE_B_SCENE = None
 
 # True se dopo validate_scenes() resta una sola scena in tutto (nessun vero
 # A/B possibile) - decide_next_scene() allora lampeggia sulla stessa scena
@@ -121,7 +278,17 @@ DEGENERATE_SCENE = None
 # (~20min) si sceglie una coppia RANDOMICA di 2 scene_A: per quella finestra,
 # _select_new_couple() attinge SOLO da quelle 2 (alternandosi ogni
 # COUPLE_DURATION come prima), poi si passa a una nuova coppia di scene_A.
-META_COUPLE_DURATION = 1200  # ~20 minuti
+#
+# FINESTRA invece di istante fisso (2026-07-14): cambiare scena_A a un
+# istante fisso, indipendentemente da cosa sta succedendo nella musica,
+# rischiava di cadere in pieno DROP/BUILD - il taglio piu' grande e vistoso
+# che PUPA fa, nel momento peggiore per farlo. Ora e' una finestra
+# [MIN, MAX]: raggiunto il MIN, il cambio scatta al primo momento buono
+# (ingresso in BREAK, gia' un segnale affidabile usato altrove) invece che
+# subito - MAX resta come tetto di sicurezza se la musica non scende mai
+# (set molto sostenuti, nessun break naturale entro la finestra).
+META_COUPLE_DURATION_MIN = 900   # 15 minuti
+META_COUPLE_DURATION_MAX = 1500  # 25 minuti
 
 # Pool di transizioni "di coppia" per il ciclo energetico A<->B (COUPLE_TRANSITIONS,
 # caricato sopra da scenes_config.yaml). STESSA pool usata per ENTRAMBE le
@@ -135,7 +302,7 @@ META_COUPLE_DURATION = 1200  # ~20 minuti
 # stato corrente. Mantiene la personalizzazione per coppia (i pool sopra
 # restano quelli), aggiunge solo un carattere riconoscibile per stato senza
 # diventare meccanico/prevedibile (mai il 100%, sempre un po' di varieta').
-TRANSITION_INTENSITY_RANK = {"Displace": 3, "Burn": 2, "Blur": 1}
+TRANSITION_INTENSITY_RANK = {"Digital Gltch": 4, "Plasma": 4, "Displace": 3, "Burn": 2, "Blur": 1}
 TRANSITION_INTENSITY_PROBABILITY = {
     State.BUILD:  0.65,  # tensione in crescita -> pende verso il piu' dinamico
     State.GROOVE: 0.55,  # ritmo stabile -> leggero sbilanciamento dinamico
@@ -192,7 +359,7 @@ PROB_ENTER_B_ON_KICK = 0.4
 # CICLO PRINCIPALE 40/30/30: quando un kick NON viene assorbito (vedi
 # PROB_ENTER_B_ON_KICK sopra), invece di andare SEMPRE a scena_B, si sceglie
 # tra 3 destinazioni pesate - stessa idea di scena_B ma con piu' varieta' ed
-# "esaltando" la scena_A col suo colore/wave_kick identitari (vedi IDENTITY).
+# "esaltando" la coppia col suo colore/wave_kick identitari (vedi IDENTITY_SETS).
 # Le raffiche vere (STROBE_BURST) restano riservate a DROP/PEAK come prima -
 # non toccate da questo schema, che si applica solo quando il kick arriva
 # fin qui SENZA gia' aver innescato una raffica sopra. DROP resta intatto
@@ -210,8 +377,8 @@ MAIN_CYCLE_COLOR_PROB = 0.30
 # Implementata come piccola macchina a stati che avanza di UN frame per ogni
 # chiamata a decide_next_scene() (NON bloccante: niente time.sleep, il loop
 # a 20Hz continua a girare libero tra un frame e l'altro).
-STROBE_SCENE = SPECIAL_SCENES.get("strobo", "white_master")  # rinominata da strobo_B
-BLACK_PAUSE_SCENE = SPECIAL_SCENES.get("black", "black_master")
+STROBE_SCENE = SPECIAL_SCENES.get("strobo", "white_color")  # rinominata da strobo_B
+BLACK_PAUSE_SCENE = SPECIAL_SCENES.get("black", "black_color")
 # Frazione delle sovrapposizioni in stato calmo che diventano una PAUSA NERA
 # (schermo a black_master, hold, ritorno) invece del solito peek verso B/A -
 # "manca il nero... troppo illuminata" - una pausa senza immagini ogni tanto,
@@ -249,14 +416,86 @@ CALM_BLACK_PAUSE_PROB_CAP = 0.9  # non deve mai diventare "quasi sempre nero"
 # ma una vera CONVERGENZA netta a "entrambe accese" in DROP/PEAK.
 # (min, max) secondi tra un flip e l'altro per stato - bass live interpola
 # dentro il range (piu' energia = piu' vicino al minimo, quindi piu' veloce).
+# Allargati +50% il 2026-07-15 (operatore: un'uscita restava accesa troppo
+# poco tempo per volta). Allargati ANCORA (~60-70%) il 2026-07-17: tripla
+# motivazione (sensazione generale "scattosa", il blocco visivo dei 2
+# monitor sotto carico, e il gap di responsivita' Linux/Windows) - meno
+# chiamate wmctrl al secondo aiuta tutte e tre, vedi PUPA_DEVELOPMENT_LOG.md.
 MONITOR_ALTERNATION_INTERVAL_RANGE = {
-    State.INTRO:  (2.0, 4.0),
-    State.BREAK:  (2.0, 4.0),
-    State.RELAX:  (1.5, 3.0),
-    State.GROOVE: (0.6, 1.5),
-    State.BUILD:  (0.25, 0.8),
+    State.INTRO:  (5.0, 9.0),
+    State.BREAK:  (5.0, 9.0),
+    State.RELAX:  (3.5, 7.0),
+    State.GROOVE: (1.5, 3.5),
+    State.BUILD:  (0.7, 2.0),
 }
 MONITOR_BOTH_ON_STATES = (State.DROP, State.PEAK)
+BEATS_PER_BAR = 4  # griglia interna di beat_count (audio_analyzer), non il vero downbeat del DJ - vedi get_monitor_outputs
+
+# 2026-07-17 (opzione B - SEQUENZA PROGRAMMATA): sostituisce il sistema
+# probabilistico costruito in precedenza lo stesso giorno (rerolling pesato
+# ad ogni bivio, poi reso "appiccicoso" con un dwell casuale) - l'operatore:
+# "le transizioni da monitor_a e monitor_b o sono a raffica o niente altro...
+# troppo statico [nel senso: mai un vero ciclo leggibile]", chiesta una vera
+# struttura (monitor_A acceso N battute, poi monitor_B N battute, ripeti) con
+# variazioni creative SOPRA quella struttura, non al posto suo. Il vecchio
+# sistema (MONITOR_CONFIG_WEIGHTS/DWELL_CYCLES, disegnato per la stessa
+# esigenza) e' stato accantonato perche' restava probabilistico anche nella
+# sua forma "appiccicosa": la struttura A/B era comunque un evento raro tra
+# tanti possibili, non un ciclo garantito.
+#
+# Quanti battute dura ciascun lato (A o B) del ciclo, per stato - piu' lungo
+# negli stati calmi, piu' corto in quelli energici (stessa filosofia della
+# vecchia MONITOR_ALTERNATION_INTERVAL_RANGE, ora espressa direttamente in
+# battute invece che in secondi convertiti).
+MONITOR_SEQUENCE_BARS = {
+    State.INTRO:  4,
+    State.BREAK:  4,
+    State.RELAX:  3,
+    State.GROOVE: 2,
+    State.BUILD:  1,
+}
+# "Respiro" occasionale (entrambe accese o entrambe spente) inserito DOPO un
+# giro A+B completo - l'accento creativo sopra la struttura, non un rimpiazzo
+# della stessa. Probabilita' di innescarsi a fine giro, per stato:
+MONITOR_BREATHER_PROBABILITY = {
+    State.INTRO:  0.30,
+    State.BREAK:  0.40,
+    State.RELAX:  0.30,
+    State.GROOVE: 0.15,
+    State.BUILD:  0.10,
+}
+MONITOR_BREATHER_BARS = 2  # durata del respiro quando innescato, in battute - fisso, non serve altra variabilita' qui
+MONITOR_BREATHER_CHOICE_WEIGHTS = {
+    State.INTRO:  {"both_off": 0.6, "both_on": 0.4},
+    State.BREAK:  {"both_off": 0.7, "both_on": 0.3},
+    State.RELAX:  {"both_off": 0.6, "both_on": 0.4},
+    State.GROOVE: {"both_off": 0.3, "both_on": 0.7},
+    State.BUILD:  {"both_off": 0.2, "both_on": 0.8},
+}
+
+# AMBIENT LUCI (2026-07-29, Step 2 del piano luci - wiggly-moseying-blum.md):
+# durante gli stati di quiete le luci fisiche passano a un wash soffuso
+# indipendente dai kick, che SOSTITUISCE del tutto il pulsare a kick su QLC+
+# (conferma esplicita dell'operatore - non convive con esso). Il colore
+# resta quello dell'identita' corrente (get_identity_color_name(), stesso
+# dizionario nome->RGB gia' usato dal pulso a kick in pupa.py) - solo
+# l'intensita' cambia, un respiro lento (coseno, mai negativo) invece del
+# picco/decadimento legato al kick.
+AMBIENT_LIGHT_STATES = (State.INTRO, State.BREAK, State.RELAX)
+AMBIENT_BREATH_PERIOD_S = 10.0  # durata di un ciclo respiro completo (salita+discesa)
+AMBIENT_PEAK_PCT = 22  # intensita' di picco del respiro, percentuale - basso apposta ("soffuso")
+
+# ALTERNANZA FARI (2026-07-29, Step 3 del piano luci): stesso schema di
+# get_monitor_outputs()/_advance_monitor_sequence() (sequenza A/B programmata
+# a battute + respiro occasionale both_on/both_off) applicato ai 2 fari
+# fisici invece delle 2 uscite monitor - stato indipendente (light_seq_phase,
+# non sincronizzato con monitor_seq_phase), stesse tabelle di partenza
+# (riferimento diretto, non copia - se in futuro servono tempi diversi per
+# le luci basta assegnare dict separati qui).
+LIGHT_SEQUENCE_BARS = MONITOR_SEQUENCE_BARS
+LIGHT_BREATHER_PROBABILITY = MONITOR_BREATHER_PROBABILITY
+LIGHT_BREATHER_BARS = MONITOR_BREATHER_BARS
+LIGHT_BREATHER_CHOICE_WEIGHTS = MONITOR_BREATHER_CHOICE_WEIGHTS
 
 # NOTA (2026-07-14): una pausa-respiro periodica era stata aggiunta qui per
 # ridurre la frequenza delle chiamate wmctrl, quando l'alternanza apriva e
@@ -276,21 +515,32 @@ MONITOR_BOTH_ON_STATES = (State.DROP, State.PEAK)
 # validate_scenes) - se l'accento di stato non esiste ancora, resta solo
 # nero/bianco pesati.
 STROBE_COLOR_WEIGHTS = {
-    State.INTRO:  {"white_master": 0.35, "black_master": 0.35, "yellow_master": 0.30},
-    State.BREAK:  {"white_master": 0.35, "black_master": 0.35, "yellow_master": 0.30},
-    State.RELAX:  {"white_master": 0.35, "black_master": 0.35, "yellow_master": 0.30},
-    State.GROOVE: {"white_master": 0.35, "black_master": 0.35, "red_master": 0.30},
-    State.BUILD:  {"white_master": 0.35, "black_master": 0.35, "red_master": 0.30},
-    State.DROP:   {"white_master": 0.35, "black_master": 0.35, "blue_master": 0.30},
-    State.PEAK:   {"white_master": 0.35, "black_master": 0.35, "blue_master": 0.30},
+    # 2026-07-29 (operatore): via gli accenti RGB - solo bianco/nero, ma con
+    # un mix che varia per stato invece di un peso fisso 35/35 uguale
+    # ovunque, cosi' da ottenere "sfumature di grigio" statistiche (piu'
+    # nero = grigio scuro negli stati calmi, piu' bianco = grigio chiaro/
+    # luminoso in quelli energici) senza bisogno di scene _color grigie
+    # dedicate (non esistono in OBS, non richieste).
+    State.INTRO:  {"white_color": 0.30, "black_color": 0.70},
+    State.BREAK:  {"white_color": 0.30, "black_color": 0.70},
+    State.RELAX:  {"white_color": 0.30, "black_color": 0.70},
+    State.GROOVE: {"white_color": 0.50, "black_color": 0.50},
+    State.BUILD:  {"white_color": 0.50, "black_color": 0.50},
+    State.DROP:   {"white_color": 0.70, "black_color": 0.30},
+    State.PEAK:   {"white_color": 0.70, "black_color": 0.30},
 }
 
 STROBE_BURST_COUNT = 4          # numero di flash (ON+OFF) per raffica
 STROBE_BURST_INTERVAL = 0.10    # secondi tra un frame e l'altro, fallback se il BPM non e' ancora stimato
 STROBE_BEAT_DIVISOR = 4         # 1/4 di battito (sedicesimo) - a 150 BPM coincide col vecchio 0.10 fisso
 STROBE_BURST_PROBABILITY = {
-    State.PEAK: 0.35,
-    State.DROP: 0.15,
+    # Dimezzate 2026-07-21 (stesso intervento gia' fatto su CUT_BURST_PROBABILITY
+    # il 07-17 per lo stesso tipo di lamentela - "molto meglio" il verdetto
+    # allora): test dal vivo di stasera, 2501 STROBE su ~4300 switch totali
+    # (~58%) - dominava nettamente il traffico di scena, coerente col
+    # "troppi flash color_master" gia' segnalato la sessione precedente.
+    State.PEAK: 0.175,  # era 0.35
+    State.DROP: 0.075,  # era 0.15
 }
 STROBE_TRANSITION_CHOICES = ["Taglio", "White Fade"]  # provate entrambe, scelta random ad ogni raffica
 
@@ -327,7 +577,12 @@ FADE_DURATION_RANGE = (500, 2800)  # ms: (bass alto -> corto, bass basso -> lung
 # macchina a stati della raffica strobo (_trigger_strobe/_advance_burst),
 # con alt_scene = l'altra scena della coppia invece di STROBE_SCENE.
 CUT_BURST_STEPS = 6  # 3 tagli (ON+OFF) per raffica
-CUT_BURST_INTERVAL = 0.12  # secondi tra un taglio e l'altro
+# L'intervallo tra un taglio e l'altro usa _get_strobe_interval() (agganciato
+# al beat, stesso meccanismo dello strobe) invece di un valore fisso proprio -
+# a BPM tipici (~125-130) un sedicesimo coincide quasi esattamente col
+# vecchio 0.12s fisso, quindi il cambio e' a basso rischio: stessa sensazione
+# quando il BPM e' nella norma, ma ora davvero agganciato al brano invece di
+# essere una coincidenza numerica.
 # Soglia abbassata da -15 a -10 (piu' permissiva, cattura anche pull-back
 # piu' leggeri) e probabilita' raddoppiate: nel primo test live nessuna
 # raffica e' scattata in 2 minuti nonostante pull-back osservati - non
@@ -335,12 +590,106 @@ CUT_BURST_INTERVAL = 0.12  # secondi tra un taglio e l'altro
 # il trend), quindi si agisce su entrambe per sicurezza.
 CUT_BURST_TREND_THRESHOLD = -10.0  # quanto deve scendere bass sotto bass_avg per contare come "pull-back"
 CUT_BURST_COOLDOWN = 2.0  # secondi minimi tra una raffica di cut e la successiva
+
+# FLASH NERO PRE-DROP (2026-07-17, V2 - vera previsione, non il semplice
+# bordo BUILD->DROP): a differenza di CUT_BURST_TREND_THRESHOLD (trend
+# ISTANTANEO, bass singolo blocco vs bass_avg), qui serve una risalita
+# SOSTENUTA su qualche secondo - la classica rampa prima di un drop. Confronta
+# la media energia dell'ultimo mezzo secondo con quella di 0.5-2s fa
+# (RUNUP_WINDOW_SHORT/LONG, in campioni a 20Hz) contro l'escursione recente
+# (percentile 10-90 di energy_history, stessa filosofia adattiva di
+# _adaptive_thresholds - non soglie fisse, si adatta al genere). Se sale
+# abbastanza rispetto a quell'escursione, consideriamo in corso una risalita
+# degna del flash - PRIMA che sfoci in un vero State.DROP/PEAK.
+# 2026-07-17: RICALIBRATO dopo il primo test dal vivo (log RUNUP-CALIBRAZIONE
+# in _detect_runup) - con finestre corte (0.5s/2s) e soglia 0.35, slope_frac
+# oscillava tra -0.9 e +0.9 nel giro di pochi secondi anche su musica "piatta"
+# (tecno con bass_avg gia' costantemente alto, range dinamico compresso -
+# bastano piccole oscillazioni naturali per generare frazioni enormi con un
+# range 10-90 percentile piccolo). 69 falsi positivi in un test di pochi
+# minuti. Fix combinato (non una sola leva): finestre piu' larghe (smussano
+# il rumore), soglia piu' alta, E persistenza nel tempo (deve superarla per
+# RUNUP_PERSISTENCE_S di fila, non un istante isolato - un singolo campione
+# sopra soglia si azzera subito se scende anche per un frame).
+RUNUP_WINDOW_SHORT = 24   # ~1.2s a 20Hz: media "adesso" (era 10/~0.5s)
+RUNUP_WINDOW_LONG = 80    # ~4.0s a 20Hz: finestra totale, la parte prima di SHORT e' la "baseline" (era 40/~2.0s)
+# 2026-07-17: ricalibrato una seconda volta - 54 flash in ~13min dal vivo,
+# ancora troppo frequente per un accento che deve leggersi come raro/
+# predittivo. Tre leve insieme (non una sola) come nella prima calibrazione:
+# soglia piu' alta, persistenza piu' lunga, cooldown piu' lungo.
+RUNUP_SLOPE_FRACTION = 0.65  # era 0.5 (originale 0.35)
+RUNUP_PERSISTENCE_S = 0.7  # era 0.4 - il superamento soglia deve reggere almeno cosi' a lungo di fila
+RUNUP_FLASH_COOLDOWN = 10.0  # era 6.0 - secondi minimi tra un flash e il successivo
+RUNUP_FLASH_MAX_ACTIVE_S = 15.0  # se la risalita si blocca senza mai sfociare in DROP/PEAK, si riarma comunque dopo questo tempo
+
+# ELEGGIBILITA' PER STATO (2026-07-22): prima escludeva solo DROP/PEAK (il
+# flash ha gia' "fatto centro" li'), lasciando eleggibili anche INTRO/BREAK/
+# RELAX - dove una "risalita" prima di un drop non ha senso musicale (non
+# si sta costruendo verso niente). Analizzando un test dal vivo: 15 flash
+# in 14 minuti, ma 7/15 durante INTRO/RELAX/GROOVE invece che durante una
+# vera tensione in crescita - probabile causa del "non sembra legato a un
+# drop vero" riportato dal vivo. Ristretto a BUILD/GROOVE, gli unici stati
+# dove una risalita sostenuta rappresenta davvero un'anticipazione di drop.
+RUNUP_ELIGIBLE_STATES = (State.BUILD, State.GROOVE)
+
+# SOGLIA BREAK STABILE (2026-07-22): _adaptive_thresholds() calcolava anche
+# la soglia break dagli stessi ~45s di energy_history usati per peak/build/
+# groove - per un break BREVE va bene (si adatta al genere), ma un break
+# SOSTENUTO riempie sempre piu' quella finestra di campioni "bassi", facendo
+# scendere il 12* percentile INSIEME al break stesso: rincorsa infinita,
+# osservato dal vivo (un break lungo "sfuma" in RELAX senza che la musica
+# sia cambiata). Su una finestra molto piu' lunga lo stesso break pesa una
+# frazione molto piu' piccola, quindi la soglia resta stabile - vedi
+# self.energy_history_long in __init__ e l'uso dentro _adaptive_thresholds.
+LONG_ENERGY_HISTORY_SAMPLES = 4800  # ~4 minuti a 20Hz (contro i 900/~45s della finestra breve)
+# Rete di sicurezza indipendente dai percentili: sotto questo valore
+# assoluto (0-100, stessa scala normalizzata di bass/bass_avg) e' SEMPRE
+# break, anche nell'improbabile caso in cui pure la finestra lunga si fosse
+# adattata verso il basso - un vero quasi-silenzio non deve mai "sfumare"
+# in RELAX.
+BREAK_ABSOLUTE_FLOOR = 8
+
+# SEGNALE BREAK ROBUSTO (2026-07-22): bass_avg normale e' comunque diviso
+# per il tetto AGC VELOCE di audio_analyzer.py (AGC_RELEASE) - durante un
+# break prolungato quel tetto insegue verso il basso in pochi minuti, e una
+# volta abbassato un silenzio successivo torna a sembrare una percentuale
+# "normale" invece di un crollo netto (scoperto dal vivo 2026-07-22). Il
+# bass_avg_long esposto da audio_analyzer.py (stesso bass grezzo, tetto a
+# rilascio 10x piu' lento, AGC_RELEASE_LONG) non si e' ancora eroso allo
+# stesso modo - sotto questa soglia e' un break vero anche se bass_avg
+# "normale" non lo mostra piu' chiaramente.
+BREAK_LONG_FLOOR_PCT = 15
+
+# CAMBIO TRACCIA (2026-07-22): PUPA non aveva nessun modo di distinguere un
+# vero cambio di brano/DJ transition da una pausa interna al brano corrente
+# - "INTRO" esisteva solo come timer legato alla rotazione scena_A, mai
+# all'audio. Riusa due segnali gia' esistenti invece di costruire una nuova
+# analisi spettrale da zero: un break piu' lungo del tipico "respiro"
+# interno a un brano (TRACK_CHANGE_MIN_BREAK_S) SEGUITO da un BPM che, una
+# volta ristabilizzato dopo il break, e' cambiato di parecchio rispetto a
+# prima (TRACK_CHANGE_BPM_DELTA) - la combinazione dei due e' molto piu'
+# specifica di uno solo (un break lungo da solo puo' essere solo un
+# breakdown lungo dello stesso brano; un piccolo drift di BPM da solo puo'
+# essere solo l'imprecisione naturale della stima). Se scatta, forza un
+# mini-INTRO (stessa durata di _intro_window(), non un nuovo numero) -
+# cosi' un vero cambio di traccia riceve lo stesso trattamento "calmo"
+# gia' riservato all'inizio di ogni coppia_A, indipendentemente da quando
+# e' scattato l'ultimo cambio scena_A.
+TRACK_CHANGE_MIN_BREAK_S = 8.0    # sotto questa durata, un break e' probabilmente solo un respiro interno al brano
+TRACK_CHANGE_BPM_DELTA = 8.0      # BPM ristabilizzato che si scosta almeno cosi' tanto da quello pre-break
+TRACK_CHANGE_CHECK_DELAY_S = 8.0  # attesa dopo l'uscita da break prima di confrontare il BPM - serve tempo perche' si ristabilizzi sui nuovi kick (audio_analyzer._update_bpm richiede >=4 intervalli validi)
+TRACK_CHANGE_COOLDOWN_S = 30.0    # secondi minimi tra un rilevamento e il successivo
+
+# 2026-07-17: dimezzate su tutti gli stati - "diminuzione dei tagli",
+# tripla motivazione (sensazione scattosa + blocco monitor sotto carico +
+# gap Linux/Windows, vedi PUPA_DEVELOPMENT_LOG.md). STROBE_BURST_PROBABILITY
+# lasciata invariata (gia' riservata a DROP/PEAK, non la fonte principale).
 CUT_BURST_PROBABILITY = {
-    State.BUILD:  0.50,
-    State.GROOVE: 0.40,
-    State.DROP:   0.30,
-    State.PEAK:   0.30,
-    State.RELAX:  0.20,
+    State.BUILD:  0.25,
+    State.GROOVE: 0.20,
+    State.DROP:   0.15,
+    State.PEAK:   0.15,
+    State.RELAX:  0.10,
 }
 
 # SOVRAPPOSIZIONE: "peek" verso l'altra scena, spinto al 40-60% di blend, mantenuto
@@ -389,29 +738,57 @@ class HybridCouplesModel:
         self.in_scene_a = True
 
         self.couple_start_time = 0
-        self.COUPLE_DURATION = 240  # 4 minuti
+        # Finestra [MIN, MAX] invece di istante fisso - vedi commento sopra
+        # META_COUPLE_DURATION_MIN/MAX per il perche'.
+        self.COUPLE_DURATION_MIN = 150  # 2.5 minuti
+        self.COUPLE_DURATION_MAX = 360  # 6 minuti
 
-        self.couple_history = deque(maxlen=5)
         self.last_switch_time = 0
+
+        # GIRO INIZIALE (vedi initialize()/_select_new_couple()): mazzo
+        # mescolato con TUTTE le scene_A, consumato una volta sola all'avvio
+        # per mostrarle tutte in fila senza ripetizioni prima di passare al
+        # ciclo a coppie fisse - vedi META_PAIR_DUOS. startup_tour_done
+        # diventa True quando il mazzo si svuota (non a tempo).
+        self.startup_tour_bag = []
+        self.startup_tour_done = False
 
         # META-COPPIA tra scene_A (vedi META_COUPLE_DURATION sopra): quali 2
         # scene_A sono "in gioco" per i prossimi ~20 minuti
         self.meta_couple_start_time = 0
         self.current_meta_pair = []
         self.meta_pair_shuffle_bag = []  # "mazzo mescolato", vedi _select_new_meta_pair
+        self.current_identity = {}  # identita' (transition/color/wave_kick/waveform) della coppia corrente, vedi _roll_new_identity
+        self.identity_shuffle_bag = []  # "mazzo mescolato", vedi _roll_new_identity
 
         # STATE MACHINE
         self.current_state = State.INTRO
         self.state_start_time = 0
         self.energy_history = deque(maxlen=900)  # ~45s a 20Hz, per le soglie adattive (vedi _adaptive_thresholds)
+        self.energy_history_long = deque(maxlen=LONG_ENERGY_HISTORY_SAMPLES)  # ~4min, solo per la soglia break (vedi _adaptive_thresholds)
         self.last_bass = 0  # Ultimo valore bass live, per modulazione continua
         self.last_bass_avg = 0  # Ultima media bass, per calcolare la velocita' del break
+        self.last_bass_avg_long = 0  # bass_avg sul tetto AGC lento (vedi BREAK_LONG_FLOOR_PCT) - break piu' robusto
         self.last_bpm = 0.0  # Ultimo BPM stimato da audio_analyzer, per l'intervallo strobo agganciato al beat
+        self.last_is_beat = False  # Griglia di beat di audio_analyzer (vedi get_monitor_outputs)
+        self.last_beat_count = 0
         self.calm_level = 0  # 0-3, impostato dall'hotkey OBS (vedi CALM_MULTIPLIERS e set_calm_level)
         self.loop_scene = False  # hotkey OBS: congela il timer 4min sulla scena_A corrente (vedi set_loop_scene)
 
-        self.monitor_show1_on = True  # quale uscita e' "accesa" nell'alternanza (vedi get_monitor_outputs)
+        # FLASH NERO PRE-DROP (vedi RUNUP_* e _detect_runup)
+        self.runup_flash_active = False  # gia' scattato per QUESTA risalita, in attesa che si risolva prima di poter riscattare
+        self.runup_flash_start_time = 0  # per il timeout RUNUP_FLASH_MAX_ACTIVE_S
+        self.last_runup_flash_time = -RUNUP_FLASH_COOLDOWN  # permette un flash gia' dal primo avvio, non solo dopo il cooldown
+        self.pre_drop_flash_pending = False  # letto (e consumato) da pupa.py per pilotare black_overlay
+        self.last_runup_debug_log_time = 0  # rate-limit per il log temporaneo di calibrazione in _detect_runup
+        self.runup_condition_since = None  # timestamp da cui slope_frac supera la soglia SENZA interruzioni (persistenza)
+
         self.monitor_last_flip_time = 0
+        self.monitor_last_flip_bar = 0  # bar corrente (beat_count // BEATS_PER_BAR) al momento dell'ultimo cambio di fase
+        self.monitor_seq_phase = "A"  # fase corrente della sequenza programmata: "A" / "B" / "both_on" / "both_off" (vedi get_monitor_outputs)
+        self.light_last_flip_time = 0
+        self.light_last_flip_bar = 0  # stessa idea di monitor_last_flip_bar, stato indipendente (Step 3 piano luci)
+        self.light_seq_phase = "A"  # fase dell'alternanza fari - stesso schema di monitor_seq_phase, non sincronizzata con esso
         self.last_energy_trend = 0  # bass - bass_avg dell'ultimo _update_state, per la raffica di cut
         self.recent_kick_peak_bass = 0  # Massimo kick visto nello stato corrente (per il lampo singolo GROOVE/BUILD)
         self.last_cut_burst_time = 0  # Cooldown tra una raffica di cut e la successiva
@@ -421,6 +798,14 @@ class HybridCouplesModel:
         # in BUILD/GROOVE durante una risalita rapida post-break
         self.break_exit_time = None
         self.bass_at_break_exit = 0
+
+        # CAMBIO TRACCIA (vedi TRACK_CHANGE_* sopra)
+        self.break_entered_at = 0.0        # timestamp di inizio del BREAK corrente, per misurarne la durata
+        self.bpm_at_break_start = 0.0      # bpm stabile subito prima di entrare in BREAK (per il confronto post-break)
+        self.break_duration_pending = 0.0  # durata dell'ultimo break, in attesa che il controllo BPM si esegua
+        self.track_change_pending_check_at = 0.0  # 0 = nessun controllo in sospeso
+        self.track_change_intro_until = 0.0       # forza INTRO fino a questo timestamp se rilevato un vero cambio traccia
+        self.last_track_change_time = -TRACK_CHANGE_COOLDOWN_S  # permette un rilevamento gia' dal primo break, non solo dopo il cooldown
 
         self.temp_b_scene = None  # Temp override per wave_kick
         self.temp_b_scene_time = 0  # Timestamp quando è stato settato
@@ -446,40 +831,56 @@ class HybridCouplesModel:
         # Sovrapposizione (peek + ritorno, non bloccante)
         self.overlap_active = False
         self.overlap_base_scene = None       # scena di partenza, a cui si torna a fine overlap
+        self.overlap_start_time = 0          # per sintetizzare il respiro in-out-in-out (vedi get_black_pause_breath)
         self.overlap_hold_until = 0
         self.overlap_forward_duration_ms = 0
         self.overlap_reverse_duration_ms = 0
         self.overlap_transition_choice = "Fade"
+        self.overlap_is_black_pause = False   # True solo se l'overlap corrente e' una vera PAUSA NERA
 
     def initialize(self, current_scene, current_time):
         """Inizializza stato e coppia.
 
-        Scena_A di partenza SEMPRE randomizzata tra tutte quelle valide,
-        ignorando quale scena_A OBS sta gia' mostrando (che tra un test e
-        l'altro resta quasi sempre la stessa, es. urbanfree_A - "vedo
-        sempre urbanfree_A"). pupa.py forza poi lo switch reale in OBS
-        subito dopo initialize_model(), cosi' quello che si vede combacia
-        da subito con quello che il modello crede.
+        Scena_A di partenza e giro iniziale SEMPRE mescolati tra tutte
+        quelle valide, ignorando quale scena_A OBS sta gia' mostrando (che
+        tra un test e l'altro resta quasi sempre la stessa, es.
+        urbanfree_A - "vedo sempre urbanfree_A"). pupa.py forza poi lo
+        switch reale in OBS subito dopo initialize_model(), cosi' quello
+        che si vede combacia da subito con quello che il modello crede.
 
-        Prima meta-coppia (vedi META_COUPLE_DURATION) = TUTTE le scene_A
-        invece delle solite 2 - "almeno al primo avvio deve far vedere
-        tutte le 8 scene_A", che con la normale finestra di 2 alla volta
-        richiederebbe fino a ~80min per una copertura completa. Dalla
-        SECONDA meta-coppia in poi (al primo scadere dei 20 min) si torna
-        al normale mazzo mescolato da 2."""
+        Giro iniziale (RIPRISTINATO 2026-07-21, vedi startup_tour_bag/
+        _select_new_couple): mazzo mescolato con TUTTE le scene_A, "in
+        fila" senza ripetizioni - non piu' una finestra a tempo
+        (META_COUPLE_DURATION) come prima, che poteva tagliare il giro a
+        meta' o prolungarlo oltre la copertura completa. Il passaggio al
+        ciclo normale (coppie fisse, META_PAIR_DUOS) scatta quando il mazzo
+        si SVUOTA (vedi _select_new_couple), non a un tempo fisso."""
         all_a = list(COUPLES.keys())
-        self.current_couple_a = random.choice(all_a) if all_a else "urbanfree_A"
+        self.startup_tour_bag = list(all_a)
+        random.shuffle(self.startup_tour_bag)
+        self.current_couple_a = self.startup_tour_bag.pop() if self.startup_tour_bag else "urbanfree_A"
+        self.startup_tour_done = not self.startup_tour_bag  # gia' vero se c'era <=1 scena_A in tutto
         self.in_scene_a = True
 
-        self.current_meta_pair = list(all_a)
+        self.current_meta_pair = list(all_a)  # ancora "aperto" finche' il giro non finisce
         self.meta_pair_shuffle_bag = []  # forza un mescolamento fresco al primo vero cambio meta-coppia
         self.meta_couple_start_time = current_time
 
+        self.identity_shuffle_bag = []  # forza un mescolamento fresco al primo vero cambio identita'
+        self._roll_new_identity()
+
         self.current_b_scene = self._roll_next_b_scene()
+        # PRIORITA' AVVIO 2026-07-16: se "slide" e' nel pool (appena
+        # aggiunta, non ancora vista dal vivo), forza che sia la prima
+        # scena_B mostrata al primo avvio di pupa.py - "cosi' la vediamo
+        # subito all'opera". Solo un override una tantum su questo avvio,
+        # non cambia il pool ne' le rotazioni successive.
+        if "slide" in ALL_B_SCENES:
+            self.current_b_scene = "slide"
+            self.last_shown_b_scene = "slide"
         self.couple_start_time = current_time
         self.state_start_time = current_time
         self.current_state = State.INTRO
-        self.couple_history.append(self.current_couple_a)
         self.last_switch_time = current_time
 
     def force_couple(self, scene_name, current_time):
@@ -505,7 +906,6 @@ class HybridCouplesModel:
         self.current_b_scene = self._roll_next_b_scene()
         self.last_switch_time = current_time
         self.last_transition_is_return = False
-        self.couple_history.append(scene_name)
 
         self.burst_active = False
         self.overlap_active = False
@@ -515,18 +915,20 @@ class HybridCouplesModel:
         self.recent_kick_peak_bass = 0
 
     def _get_identity_duos(self):
-        """Raggruppa le scene_A per pool_B condiviso - le 4 coppie-colore
-        (vedi IDENTITY/scenes_config.yaml: urbanfree_A+segnali_A=rosso,
-        psicodance_A+strobo_A=blu, montezuma_A+futureflash_A=giallo,
-        kusanagi_A+mri_A=verde). Calcolato dal vivo su COUPLES (gia'
-        filtrato da validate_scenes()), non hardcoded - resta corretto
-        anche se una scena_A sparisce da OBS (il suo duo diventa da 1 sola
-        scena invece di due, gestito senza casi speciali da chi lo consuma)."""
-        groups = {}
-        for a_scene, b_pool in COUPLES.items():
-            key = frozenset(b_pool)
-            groups.setdefault(key, []).append(a_scene)
-        return list(groups.values())
+        """Ritorna le meta-coppie FISSE di scene_A (META_PAIR_DUOS, da
+        scenes_config.yaml) su cui _select_new_meta_pair() fa lo shuffle-bag.
+
+        FINO al 2026-07-21 questo raggruppava le scene_A per pool_B
+        condiviso - funzionava quando 2 scene_A condividevano lo stesso
+        pool_B (vecchio sistema a 8 scene_A), ma la ristrutturazione
+        2026-07-15 diede ad ogni scena_A un pool_B dedicato univoco: ogni
+        "duo" calcolato cosi' finiva per avere 1 sola scena_A, bloccando la
+        finestra di META_COUPLE_DURATION (15-25min) su una sola scena_A per
+        l'intera finestra invece di alternarne 2 come previsto - una
+        ricorrenza da 5+ ripetizioni consecutive serviva perche' emergesse
+        chiaramente dal vivo. Le coppie sono ora esplicite e fisse, gia'
+        filtrate da validate_scenes() sulle scene_A REALMENTE disponibili."""
+        return [list(duo) for duo in META_PAIR_DUOS if duo]
 
     def _select_new_meta_pair(self):
         """Sceglie una nuova meta-coppia (vedi META_COUPLE_DURATION): per i
@@ -563,20 +965,49 @@ class HybridCouplesModel:
         return self.current_meta_pair
 
     def _select_new_couple(self):
-        """Seleziona nuova coppia_A dalla meta-coppia corrente (esclude ultime 5)"""
+        """Seleziona la prossima scena_A.
+
+        GIRO INIZIALE (self.startup_tour_done ancora False): pesca dal
+        mazzo mescolato (startup_tour_bag, riempito una volta sola in
+        initialize()) - garantisce che tutte le scene_A compaiano una volta
+        "in fila" prima di qualunque ripetizione. Quando il mazzo si
+        svuota, passa SUBITO al ciclo normale chiamando
+        _select_new_meta_pair() (sceglie la prima vera coppia fissa) -
+        RIPRISTINATO 2026-07-21: prima il passaggio era legato al tempo
+        (META_COUPLE_DURATION), che poteva tagliare il giro a meta' o
+        prolungarlo oltre la copertura completa a seconda di quanto
+        duravano le singole coppie.
+
+        CICLO NORMALE (dopo il giro, coppie fisse da 2 - vedi
+        META_PAIR_DUOS): alternanza DETERMINISTICA, l'unica scelta che non
+        ripete quella attuale e' sempre l'altra - nessun mazzo/finestra
+        serve con solo 2 opzioni fisse (il vecchio anti-repeat a finestra
+        di 5, rimosso qui, si saturava in 2 pescate e permetteva comunque
+        una ripetizione per puro caso, osservato dal vivo 2026-07-21)."""
+        if not self.startup_tour_done:
+            new_couple = self.startup_tour_bag.pop() if self.startup_tour_bag else self.current_couple_a
+            if not self.startup_tour_bag:
+                self.startup_tour_done = True
+                self._select_new_meta_pair()
+            return new_couple
+
         pool = self.current_meta_pair if self.current_meta_pair else list(COUPLES.keys())
-        available = [a for a in pool if a not in self.couple_history]
-        if not available:
-            available = pool
-        new_couple = random.choice(available)
-        self.couple_history.append(new_couple)
-        return new_couple
+        available = [a for a in pool if a != self.current_couple_a]
+        return available[0] if available else pool[0]
 
     def _select_b_scene(self, couple_a, exclude=None):
-        """Sceglie una scena _B dal pool della coppia data. Se il pool ha piu'
-        di un'opzione, evita di ripetere `exclude` (l'ultima usata) — cosi' la
-        rotazione e' realmente percepibile, non solo teoricamente possibile."""
-        pool = COUPLES.get(couple_a, [])
+        """Sceglie una scena _B dal pool CONDIVISO tra tutte le coppie
+        (ALL_B_SCENES, ristrutturazione 2026-07-15 - prima pescava solo dal
+        pool della coppia_A data, ora tutte le _B sono in gioco per
+        qualunque scena_A, stessa filosofia di IDENTITY_SETS). `couple_a`
+        non e' piu' usato per filtrare (tenuto come parametro per
+        compatibilita' di firma) - se il pool e' vuoto o non validato,
+        ricade su COUPLES[couple_a] come rete di sicurezza. Evita di
+        ripetere `exclude` (l'ultima usata) se il pool ha piu' di
+        un'opzione — cosi' la rotazione e' realmente percepibile."""
+        if DEBUG_FORCE_B_SCENE and DEBUG_FORCE_B_SCENE in ALL_B_SCENES:
+            return DEBUG_FORCE_B_SCENE
+        pool = ALL_B_SCENES or COUPLES.get(couple_a, [])
         if not pool:
             return None
         if exclude and len(pool) > 1:
@@ -600,12 +1031,41 @@ class HybridCouplesModel:
         self.last_shown_b_scene = self.current_b_scene
         return self.current_b_scene
 
+    def _roll_new_identity(self):
+        """Assegna una nuova identita' (vedi IDENTITY_SETS) alla coppia_A
+        appena iniziata - chiamata da decide_next_scene ad ogni cambio
+        scena_A, INDIPENDENTEMENTE da quale scena_A sia stata scelta
+        (ristrutturazione 2026-07-15: prima ogni scena_A aveva
+        un'identita' fissa, ora le 4 identita' ruotano libere cosi' ogni
+        scena_A puo' comparire nel tempo con colori/kick diversi).
+
+        "Mazzo mescolato" (self.identity_shuffle_bag), stesso principio di
+        _select_new_meta_pair(): tutte le identita' vengono mescolate una
+        volta e consumate una alla volta finche' il mazzo non si svuota,
+        poi si rimescola - garantisce che tutte e 4 compaiano esattamente
+        una volta ogni giro completo, invece di affidarsi al puro caso
+        (che potrebbe ripetere la stessa identita' piu' volte di fila per
+        coincidenza)."""
+        if not IDENTITY_SETS:
+            self.current_identity = {}
+            return self.current_identity
+
+        if not self.identity_shuffle_bag:
+            self.identity_shuffle_bag = list(range(len(IDENTITY_SETS)))
+            random.shuffle(self.identity_shuffle_bag)
+
+        idx = self.identity_shuffle_bag.pop()
+        self.current_identity = IDENTITY_SETS[idx] if idx < len(IDENTITY_SETS) else {}
+        return self.current_identity
+
     def _get_identity(self):
-        """Ritorna il dict identita' (transition/color/wave_kick) della
-        scena_A corrente, gia' filtrato da validate_scenes() sui campi
-        REALMENTE disponibili in OBS. Dict vuoto se la scena_A non e' in
-        IDENTITY - i chiamanti gestiscono il fallback campo per campo."""
-        return IDENTITY.get(self.current_couple_a, {})
+        """Ritorna il dict identita' (transition/color/wave_kick/waveform)
+        assegnato alla coppia_A CORRENTE (vedi _roll_new_identity) - gia'
+        filtrato da validate_scenes() sui campi REALMENTE disponibili in
+        OBS. Dict vuoto se non ancora assegnata (non dovrebbe capitare
+        dopo initialize()) - i chiamanti gestiscono il fallback campo per
+        campo."""
+        return self.current_identity
 
     def _pick_strobe_color(self):
         """Sceglie il colore per la prossima raffica/lampo, pesato per stato
@@ -620,6 +1080,24 @@ class HybridCouplesModel:
         weight_values = list(available_weighted.values())
         return random.choices(colors, weights=weight_values, k=1)[0]
 
+    INTRO_SHARE_OF_COUPLE_MIN = 30.0 / 240.0  # rapporto tarato in origine (30s su una coppia da 240s fissi)
+
+    def _intro_window(self):
+        """Durata (secondi) della finestra INTRO forzata all'inizio di ogni
+        coppia - proporzionale a COUPLE_DURATION_MIN invece di un valore
+        fisso (era 30s fisso quando le coppie duravano 240s fissi SEMPRE).
+        Con la finestra [MIN,MAX] introdotta il 2026-07-14 le coppie
+        ruotano piu' spesso (media ~150-200s osservata dal vivo, contro i
+        240s fissi di prima) - un INTRO fisso a 30s finiva per occupare una
+        fetta di tempo PROPORZIONALMENTE piu' grande (~19% osservato invece
+        del ~12.5% originale su 7 rotazioni/18min), favorendo wave_kick/
+        ago_talk (eleggibili per default in INTRO) a scapito delle scene_B
+        (osservato dal vivo: scene_B nettamente sotto-rappresentate, 11
+        eventi contro 57 di wave_kick sulle stesse 300 righe di log).
+        Scalare mantiene lo stesso rapporto tarato in origine indipendentemente
+        da quanto dura una coppia adesso."""
+        return self.COUPLE_DURATION_MIN * self.INTRO_SHARE_OF_COUPLE_MIN
+
     def _calm(self, key):
         """Moltiplicatore CALM MODE per l'asse richiesto ("cut"/"fade"/
         "black_prob"/"black_hold"), in base a self.calm_level (0-3). Vedi
@@ -629,24 +1107,204 @@ class HybridCouplesModel:
     def get_monitor_outputs(self, current_time):
         """Decide quale/i delle 2 uscite show mostrare 'accesa' in questo
         istante - chiamata ad ogni tick da pupa.py (solo Linux, vedi
-        secrets_local.py). A bassa energia alterna una sola uscita per
-        volta (intervallo che si accorcia con l'energia, vedi
-        MONITOR_ALTERNATION_INTERVAL_RANGE), in DROP/PEAK converge su
-        ENTRAMBE accese fisse (non un'alternanza sempre piu' rapida).
+        secrets_local.py). In DROP/PEAK converge su ENTRAMBE accese fisse
+        (MONITOR_BOTH_ON_STATES), sempre.
+
+        2026-07-17 (opzione B, sostituisce il sistema probabilistico dello
+        stesso giorno - vedi commento sopra MONITOR_SEQUENCE_BARS): una vera
+        SEQUENZA programmata, non un dado ad ogni bivio. Fase "A" (show1
+        acceso) per MONITOR_SEQUENCE_BARS[stato] battute, poi fase "B"
+        (show2 acceso) per altrettante - un ciclo leggibile, non un'illusione
+        statistica. Dopo un giro A+B completo, un "respiro" (both_on/
+        both_off, MONITOR_BREATHER_PROBABILITY) puo' inserirsi come accento
+        creativo SOPRA la struttura, non al suo posto. Fallback al vecchio
+        timer libero (usando il MAX del range storico) se il BPM non e'
+        ancora stimato.
 
         Ritorna {"show1": bool, "show2": bool}."""
         if self.current_state in MONITOR_BOTH_ON_STATES:
             return {"show1": True, "show2": True}
 
-        lo, hi = MONITOR_ALTERNATION_INTERVAL_RANGE.get(self.current_state, (2.0, 4.0))
-        bass_factor = min(1.0, max(0.0, self.last_bass / 100.0))
-        interval = hi - bass_factor * (hi - lo)  # piu' energia -> piu' vicino al minimo (piu' veloce)
+        bars_needed = MONITOR_BREATHER_BARS if self.monitor_seq_phase in ("both_on", "both_off") \
+            else MONITOR_SEQUENCE_BARS.get(self.current_state, 2)
 
-        if current_time - self.monitor_last_flip_time >= interval:
-            self.monitor_last_flip_time = current_time
-            self.monitor_show1_on = not self.monitor_show1_on
+        if self.last_bpm > 0:
+            current_bar = self.last_beat_count // BEATS_PER_BAR
+            is_bar_start = self.last_beat_count % BEATS_PER_BAR == 0
+            if (self.last_is_beat and is_bar_start
+                    and (current_bar - self.monitor_last_flip_bar) >= bars_needed):
+                self.monitor_last_flip_bar = current_bar
+                self.monitor_last_flip_time = current_time
+                self._advance_monitor_sequence()
+                debug_log(f"[MONITOR-SEQ] fase={self.monitor_seq_phase} stato={self.current_state.value} "
+                          f"bar={current_bar} bars_needed={bars_needed}")
+        else:
+            _, hi = MONITOR_ALTERNATION_INTERVAL_RANGE.get(self.current_state, (2.0, 4.0))
+            if current_time - self.monitor_last_flip_time >= hi:
+                self.monitor_last_flip_time = current_time
+                self.monitor_last_flip_bar = self.last_beat_count // BEATS_PER_BAR
+                self._advance_monitor_sequence()
+                debug_log(f"[MONITOR-SEQ] fase(fallback)={self.monitor_seq_phase} stato={self.current_state.value}")
 
-        return {"show1": self.monitor_show1_on, "show2": not self.monitor_show1_on}
+        if self.monitor_seq_phase == "A":
+            return {"show1": True, "show2": False}
+        if self.monitor_seq_phase == "B":
+            return {"show1": False, "show2": True}
+        if self.monitor_seq_phase == "both_on":
+            return {"show1": True, "show2": True}
+        return {"show1": False, "show2": False}  # "both_off"
+
+    def _advance_monitor_sequence(self):
+        """Avanza la sequenza programmata (vedi get_monitor_outputs):
+        A -> B sempre; da B, o torna ad A (giro normale) o - con
+        MONITOR_BREATHER_PROBABILITY - si inserisce un respiro (both_on/
+        both_off, scelto pesato per stato via MONITOR_BREATHER_CHOICE_WEIGHTS);
+        da un respiro si torna sempre ad A."""
+        if self.monitor_seq_phase == "A":
+            self.monitor_seq_phase = "B"
+        elif self.monitor_seq_phase == "B":
+            prob = MONITOR_BREATHER_PROBABILITY.get(self.current_state, 0.0)
+            if random.random() < prob:
+                weights = MONITOR_BREATHER_CHOICE_WEIGHTS.get(self.current_state, {"both_off": 0.5, "both_on": 0.5})
+                self.monitor_seq_phase = random.choices(list(weights.keys()), weights=list(weights.values()), k=1)[0]
+            else:
+                self.monitor_seq_phase = "A"
+        else:  # era un respiro (both_on/both_off) - torna al ciclo normale
+            self.monitor_seq_phase = "A"
+
+    def get_ambient_light(self, current_time):
+        """Intensita' (0.0-1.0, gia' scalata al picco AMBIENT_PEAK_PCT) del
+        wash ambient per gli stati di quiete - None se lo stato corrente non
+        e' uno di AMBIENT_LIGHT_STATES (nessun ambient da applicare, il
+        chiamante deve usare il pulso a kick normale). Il colore da usare e'
+        lo stesso get_identity_color_name() - pupa.py risolve nome->RGB e
+        scala per questa intensita', stesso dizionario gia' usato dal pulso
+        a kick, nessuna palette ambient separata."""
+        if self.current_state not in AMBIENT_LIGHT_STATES:
+            return None
+        phase = (current_time % AMBIENT_BREATH_PERIOD_S) / AMBIENT_BREATH_PERIOD_S
+        breath = (1 - math.cos(2 * math.pi * phase)) / 2  # 0..1..0, liscio, mai negativo
+        return breath * (AMBIENT_PEAK_PCT / 100.0)
+
+    # MODALITA' LUCI (2026-07-29, operatore) - 3 modalita' di funzionamento
+    # per il rapporto fari/monitor, pensate come selezionabili a runtime via
+    # hotkey OBS (stesso meccanismo di set_calm_level/set_loop_scene) - non
+    # ancora cablate a nessun hotkey, solo scaffold/commento per ora, come
+    # richiesto esplicitamente ("mantieni le 3 opzioni solo commentandole").
+    # Quella ATTIVA oggi e' "alternate" (get_light_outputs sotto).
+    #   1. "sync"      - i 2 fari mostrano sempre lo stesso colore
+    #                    contemporaneamente, nessuna alternanza - il
+    #                    comportamento originale pre-Step 3 (_qlc_set_rgb_both
+    #                    manda RGB pieno a entrambi, senza gate).
+    #   2. "alternate" - alternanza A/B indipendente dai monitor (Step 3,
+    #                    ATTIVA oggi): get_light_outputs()/_advance_light_sequence()
+    #                    sotto, stato proprio (light_seq_phase).
+    #   3. "inverse"   - complementare ai monitor (proposta operatore
+    #                    2026-07-29, collegata alla visione "luci/video
+    #                    complementari" di una sessione precedente): fari
+    #                    accesi SOLO quando i monitor sono nella fase
+    #                    both_off (get_monitor_outputs() -> entrambi False),
+    #                    spenti mentre il video e' visibile. Da implementare
+    #                    come branch alternativo qui dentro, selezionato da
+    #                    una futura LIGHT_MODE invece che come stato a parte -
+    #                    l'operatore vuole provarla ma non ha ancora deciso se
+    #                    sostituisce "alternate" o si aggiunge come 3a opzione.
+    def get_light_outputs(self, current_time):
+        """Dispatcher tra le 3 modalita' luci (vedi commento sopra) - non
+        ancora un vero hotkey/LIGHT_MODE selezionabile, solo lo switch
+        manuale usato per il test dal vivo del 2026-07-29. ATTIVA ORA:
+        'inverse' (proposta dell'operatore, da provare dal vivo). 'alternate'
+        (Step 3, comportamento precedente) resta sotto come metodo separato,
+        pronto per essere rimesso attivo cambiando questa riga."""
+        return self._get_light_outputs_inverse(current_time)
+        # return self._get_light_outputs_alternate(current_time)  # modalita' precedente (Step 3), non attiva ora
+
+    def _get_light_outputs_inverse(self, current_time):
+        """Modalita' 'inverse': complementare PER POSIZIONE, non "tutto o
+        niente" - fixture1 e' l'inverso di show1, fixture2 l'inverso di
+        show2 (2026-07-29, corretto dopo il primo test dal vivo - la prima
+        versione trattava "1 monitor acceso" come "1 monitor acceso" invece
+        di differenziare quale faro si accende). Soddisfa tutti e 4 i casi
+        richiesti dall'operatore:
+          - 1 monitor acceso + 1 spento -> il faro CORRISPONDENTE a quello
+            spento si accende, l'altro resta spento (non "tutti e due o
+            nessuno").
+          - 2 monitor spenti (both_off) -> 2 fari accesi.
+          - 2 monitor accesi (both_on) -> 2 fari spenti (lo strobo NON e'
+            toccato da questo gate - pilota Master per-frame indipendentemente,
+            vedi Step 1 - "eccetto strobo" e' gia' vero strutturalmente).
+        Riusa get_monitor_outputs() per leggere la fase corrente - funziona
+        anche se l'attivazione fisica dei 2 monitor (stacking finestre, solo
+        quando configurata) non e' attiva su questa macchina, dato che qui
+        serve solo la FASE del sequencer, non lo switch fisico delle finestre.
+
+        TODO (non ancora implementato, richiesta operatore stessa sessione):
+        "sempre accese le luci in corrispondenza del colore_wave a monitor
+        corrispondente, come enfasi" - quando lo show corrispondente sta
+        mostrando la sua scena _wave (parte del ciclo wave_kick/identita'),
+        il faro corrispondente dovrebbe accendersi come accento ANCHE se la
+        regola inverse sopra direbbe spento. Serve che pupa.py comunichi a
+        brain.py quale scena e' visibile su quale lato (show1/show2) - oggi
+        get_monitor_outputs() non lo sa, l'informazione vive solo in
+        pupa.py (current_scene/monitor_show1_state ecc.). Da progettare la
+        prossima volta, non implementato per non indovinare il meccanismo."""
+        monitor_state = self.get_monitor_outputs(current_time)
+        return {"fixture1": not monitor_state["show1"], "fixture2": not monitor_state["show2"]}
+
+    def _get_light_outputs_alternate(self, current_time):
+        """Modalita' 'alternate' (Step 3 originale): stessa identica
+        filosofia di get_monitor_outputs() (sequenza A/B programmata a
+        battute, con un respiro occasionale both_on/both_off), ma con stato
+        indipendente (light_seq_phase) - NON sincronizzata con l'alternanza
+        monitor, stesse tabelle di partenza. In DROP/PEAK converge su
+        entrambi accesi fissi, come per i monitor. Ritorna {"fixture1":
+        bool, "fixture2": bool}."""
+        if self.current_state in MONITOR_BOTH_ON_STATES:
+            return {"fixture1": True, "fixture2": True}
+
+        bars_needed = LIGHT_BREATHER_BARS if self.light_seq_phase in ("both_on", "both_off") \
+            else LIGHT_SEQUENCE_BARS.get(self.current_state, 2)
+
+        if self.last_bpm > 0:
+            current_bar = self.last_beat_count // BEATS_PER_BAR
+            is_bar_start = self.last_beat_count % BEATS_PER_BAR == 0
+            if (self.last_is_beat and is_bar_start
+                    and (current_bar - self.light_last_flip_bar) >= bars_needed):
+                self.light_last_flip_bar = current_bar
+                self.light_last_flip_time = current_time
+                self._advance_light_sequence()
+                debug_log(f"[LIGHT-SEQ] fase={self.light_seq_phase} stato={self.current_state.value} "
+                          f"bar={current_bar} bars_needed={bars_needed}")
+        else:
+            _, hi = MONITOR_ALTERNATION_INTERVAL_RANGE.get(self.current_state, (2.0, 4.0))
+            if current_time - self.light_last_flip_time >= hi:
+                self.light_last_flip_time = current_time
+                self.light_last_flip_bar = self.last_beat_count // BEATS_PER_BAR
+                self._advance_light_sequence()
+                debug_log(f"[LIGHT-SEQ] fase(fallback)={self.light_seq_phase} stato={self.current_state.value}")
+
+        if self.light_seq_phase == "A":
+            return {"fixture1": True, "fixture2": False}
+        if self.light_seq_phase == "B":
+            return {"fixture1": False, "fixture2": True}
+        if self.light_seq_phase == "both_on":
+            return {"fixture1": True, "fixture2": True}
+        return {"fixture1": False, "fixture2": False}  # "both_off"
+
+    def _advance_light_sequence(self):
+        """Avanza la sequenza fari - identica a _advance_monitor_sequence()
+        ma su light_seq_phase/LIGHT_BREATHER_*, stato indipendente."""
+        if self.light_seq_phase == "A":
+            self.light_seq_phase = "B"
+        elif self.light_seq_phase == "B":
+            prob = LIGHT_BREATHER_PROBABILITY.get(self.current_state, 0.0)
+            if random.random() < prob:
+                weights = LIGHT_BREATHER_CHOICE_WEIGHTS.get(self.current_state, {"both_off": 0.5, "both_on": 0.5})
+                self.light_seq_phase = random.choices(list(weights.keys()), weights=list(weights.values()), k=1)[0]
+            else:
+                self.light_seq_phase = "A"
+        else:  # era un respiro (both_on/both_off) - torna al ciclo normale
+            self.light_seq_phase = "A"
 
     def _get_strobe_interval(self):
         """Intervallo tra un frame e l'altro di flash/raffica, agganciato al
@@ -764,15 +1422,23 @@ class HybridCouplesModel:
         peek_is_return = not self.in_scene_a  # il peek va verso _A se partiamo da _B
 
         # PAUSA NERA: frazione delle sovrapposizioni in stato calmo diventa
-        # un vero "respiro" senza immagini (black_master) invece del solito
-        # peek parziale verso B/A - "manca il nero... troppo illuminata".
-        # A differenza del peek normale (blend 40-60%), qui si va al 100%
-        # (non ha senso una "mezza pausa nera" semi-trasparente).
+        # un vero "respiro" senza immagini invece del solito peek parziale
+        # verso B/A - "manca il nero... troppo illuminata". A differenza del
+        # peek normale (blend 40-60%), qui si va al 100% (non ha senso una
+        # "mezza pausa nera" semi-trasparente).
+        #
+        # 2026-07-17: target non piu' fisso su BLACK_PAUSE_SCENE
+        # (black_master) - "la pulsazione nera li' non si vede, magari con
+        # sotto waveform". Ora va sulla waveform_color dell'identita'
+        # corrente (che ha black_overlay nidificato, vedi pupa.py) cosi' il
+        # respiro pulsa contro il movimento della waveform invece che contro
+        # nero fisso; fallback su BLACK_PAUSE_SCENE se l'identita' non ha
+        # ancora una waveform assegnata/disponibile in questa installazione OBS.
         black_pause_prob = min(CALM_BLACK_PAUSE_PROB_CAP, BLACK_PAUSE_PROBABILITY * self._calm("black_prob"))
         is_black_pause = random.random() < black_pause_prob
 
         if is_black_pause:
-            peek_target_scene = BLACK_PAUSE_SCENE
+            peek_target_scene = self._get_identity().get("waveform") or BLACK_PAUSE_SCENE
             black_hold_range = tuple(h * self._calm("black_hold") for h in BLACK_PAUSE_HOLD)
             hold_time = random.uniform(*black_hold_range)
             forward_ms = random.randint(400, 800)
@@ -795,10 +1461,12 @@ class HybridCouplesModel:
 
         self.overlap_active = True
         self.overlap_base_scene = current_scene
+        self.overlap_start_time = current_time  # per sintetizzare il respiro in-out-in-out (vedi get_black_pause_breath)
         self.overlap_hold_until = current_time + hold_time
         self.overlap_forward_duration_ms = forward_ms
         self.overlap_reverse_duration_ms = reverse_ms
         self.overlap_transition_choice = random.choice(OVERLAP_TRANSITION_CHOICES)
+        self.overlap_is_black_pause = is_black_pause
 
         self.last_transition_is_return = peek_is_return
         self.last_decision_kind = "overlap_forward"
@@ -853,23 +1521,105 @@ class HybridCouplesModel:
         sorted_hist = sorted(self.energy_history)
         n = len(sorted_hist)
 
-        def pct(p):
-            idx = min(n - 1, max(0, int(n * p)))
-            return sorted_hist[idx]
+        def pct(p, data=None, data_n=None):
+            d = data if data is not None else sorted_hist
+            dn = data_n if data_n is not None else n
+            idx = min(dn - 1, max(0, int(dn * p)))
+            return d[idx]
 
         peak = pct(0.90)
         build = pct(0.70)
         groove = pct(0.45)
-        break_th = pct(0.12)
 
-        # Distacco minimo tra soglie: con poca varianza (es. un drone quasi
-        # costante) i percentili potrebbero collassare vicini, facendo
-        # oscillare lo stato per fluttuazioni minime
+        # BREAK: dalla finestra LUNGA (energy_history_long, ~4min) invece
+        # che dai 45s brevi usati sopra - vedi commento su
+        # LONG_ENERGY_HISTORY_SAMPLES/BREAK_ABSOLUTE_FLOOR. Un break
+        # sostenuto pesa una frazione molto piu' piccola su 4 minuti che su
+        # 45 secondi, quindi il 12* percentile non lo rincorre piu' verso
+        # il basso mentre e' ancora in corso. Fallback alla finestra breve
+        # se quella lunga non ha ancora abbastanza storia.
+        if len(self.energy_history_long) >= 60:
+            long_sorted = sorted(self.energy_history_long)
+            break_th = pct(0.12, long_sorted, len(long_sorted))
+        else:
+            break_th = pct(0.12)
+
+        # Distacco minimo tra peak/build/groove: con poca varianza (es. un
+        # drone quasi costante) i percentili potrebbero collassare vicini,
+        # facendo oscillare lo stato per fluttuazioni minime. break_th NON
+        # entra piu' in questa catena (2026-07-22): agganciarlo a
+        # "groove - 3" lo ricollegava al valore del gruppo breve, che
+        # durante un break sostenuto decade ESATTAMENTE come break_th
+        # decadeva prima del fix - vanificando la finestra lunga appena
+        # introdotta. break_th resta libero di essere il 12* percentile
+        # della finestra lunga, punto.
         build = min(build, peak - 3)
         groove = min(groove, build - 3)
-        break_th = min(break_th, groove - 3)
 
         return {"peak": peak, "build": build, "groove": groove, "break": break_th}
+
+    def _detect_runup(self):
+        """Rileva una risalita di energia sostenuta (vedi RUNUP_* sopra) -
+        vera previsione pre-drop, non il semplice bordo BUILD->DROP. Ritorna
+        True al massimo una volta per risalita (self.runup_flash_active fa
+        da guardia, resettato altrove quando la risalita si risolve)."""
+        if self.runup_flash_active:
+            self.runup_condition_since = None  # non accumulare persistenza mentre un flash e' gia' in corso
+            return False
+        if len(self.energy_history) < RUNUP_WINDOW_LONG:
+            return False
+
+        hist = list(self.energy_history)[-RUNUP_WINDOW_LONG:]
+        recent = hist[-RUNUP_WINDOW_SHORT:]
+        baseline = hist[:-RUNUP_WINDOW_SHORT]
+
+        def median(values):
+            s = sorted(values)
+            mid = len(s) // 2
+            return s[mid] if len(s) % 2 else (s[mid - 1] + s[mid]) / 2
+
+        # Mediana, non media: una risalita VERA deve elevare l'intera
+        # finestra recente, non un singolo blocco isolato (un kick forte da
+        # solo sposterebbe una media su 10 campioni, ma non la mediana) -
+        # distingue una rampa sostenuta da un transiente isolato, che ha
+        # gia' il suo segnale dedicato (is_kick/last_energy_trend).
+        recent_med = median(recent)
+        baseline_med = median(baseline)
+
+        sorted_hist = sorted(hist)
+        n = len(sorted_hist)
+        p10 = sorted_hist[max(0, int(n * 0.10))]
+        p90 = sorted_hist[min(n - 1, int(n * 0.90))]
+        dynamic_range = max(1.0, p90 - p10)
+
+        slope_frac = (recent_med - baseline_med) / dynamic_range
+
+        now = time.time()
+
+        # PERSISTENZA: slope_frac deve reggere sopra soglia per
+        # RUNUP_PERSISTENCE_S di fila, non un istante isolato - un solo
+        # campione sopra soglia (spike di rumore) azzera il timer al primo
+        # frame in cui ridiscende, niente "quasi ce l'aveva fatta".
+        above = slope_frac > RUNUP_SLOPE_FRACTION
+        if above:
+            if self.runup_condition_since is None:
+                self.runup_condition_since = now
+        else:
+            self.runup_condition_since = None
+        sustained = above and self.runup_condition_since is not None and (now - self.runup_condition_since) >= RUNUP_PERSISTENCE_S
+
+        # LOG TEMPORANEO 2026-07-17 - per ricalibrare con numeri REALI
+        # (primo giro: 69 falsi positivi con finestre/soglia troppo strette,
+        # vedi commento su RUNUP_WINDOW_SHORT/LONG) invece di ritentare alla
+        # cieca. Logga il valore anche quando NON scatta (rate-limited a
+        # 1/s) - da rimuovere una volta ricalibrata la soglia.
+        if now - self.last_runup_debug_log_time > 1.0:
+            self.last_runup_debug_log_time = now
+            debug_log(f"[RUNUP-CALIBRAZIONE] slope_frac={slope_frac:.3f} "
+                       f"(recent_med={recent_med:.1f} baseline_med={baseline_med:.1f} "
+                       f"range={dynamic_range:.1f}) soglia={RUNUP_SLOPE_FRACTION} sustained={sustained}")
+
+        return sustained
 
     def _update_state(self, bass, bass_avg, couple_elapsed, current_time):
         """Aggiorna stato musicale basato su energia audio
@@ -892,11 +1642,17 @@ class HybridCouplesModel:
         energy_trend = bass - bass_avg if bass_avg > 0 else 0
         self.last_energy_trend = energy_trend
         self.energy_history.append(energy)
+        self.energy_history_long.append(energy)
 
         th = self._adaptive_thresholds()
 
-        # Logica: associa energia a stato secondo le soglie adattive correnti
-        if couple_elapsed < 30:
+        # Logica: associa energia a stato secondo le soglie adattive correnti.
+        # INTRO forzato in due casi, non solo il primo: appena iniziata la
+        # coppia_A corrente, OPPURE appena rilevato un vero cambio di
+        # traccia (vedi TRACK_CHANGE_*/decide_next_scene) - stesso
+        # trattamento "calmo", due trigger diversi (rotazione scena vs
+        # audio reale).
+        if couple_elapsed < self._intro_window() or current_time < self.track_change_intro_until:
             new_state = State.INTRO
         elif energy > th["build"] and energy_trend > 10:
             new_state = State.DROP
@@ -906,7 +1662,8 @@ class HybridCouplesModel:
             new_state = State.BUILD
         elif energy > th["groove"]:
             new_state = State.GROOVE
-        elif energy < th["break"]:
+        elif (energy < th["break"] or energy < BREAK_ABSOLUTE_FLOOR
+                or (self.last_bass_avg_long > 0 and self.last_bass_avg_long < BREAK_LONG_FLOOR_PCT)):
             new_state = State.BREAK
         else:
             new_state = State.RELAX
@@ -944,17 +1701,27 @@ class HybridCouplesModel:
         return base
 
     def _weighted_couple_transition(self, couple_pool):
-        """Sceglie tra le 2 transizioni del pool della coppia corrente,
-        pesando verso quella piu' "intensa" (Displace > Burn > Blur) o
-        quella piu' calma a seconda dello stato corrente - non piu' 50/50
-        uniforme. Mai il 100%: resta sempre un po' di varieta', solo con
-        un carattere prevalente riconoscibile per stato."""
+        """Sceglie UNA transizione tra TUTTE quelle del pool (non piu' solo
+        le 2 estreme per rango - 2026-07-?? Fase 2, operatore: un pool
+        condiviso a 5+ membri con la vecchia meccanica a 2 estremi ne
+        sprecava sempre 3, mai scelte), pesando verso quelle piu' "intense"
+        (rank piu' alto in TRANSITION_INTENSITY_RANK) o piu' "calme" a
+        seconda dello stato corrente.
+
+        Blend continuo: peso_i = p*rank_i + (1-p)*(rank_max+1-rank_i), dove
+        p = TRANSITION_INTENSITY_PROBABILITY dello stato corrente. A p=1.0
+        pesa puramente sul rango (favorisce le piu' intense); a p=0.0 pesa
+        sull'inverso (favorisce le piu' calme); a p=0.5 tutti i pesi
+        diventano uguali (scelta uniforme) - stesso comportamento di prima
+        nei 3 casi limite, ma ora su tutto il pool invece che su 2 estremi
+        fissi."""
         if len(couple_pool) < 2:
             return couple_pool[0] if couple_pool else "Burn"
-        ranked = sorted(couple_pool, key=lambda t: TRANSITION_INTENSITY_RANK.get(t, 0), reverse=True)
-        high, low = ranked[0], ranked[-1]
-        prob_high = TRANSITION_INTENSITY_PROBABILITY.get(self.current_state, 0.5)
-        return high if random.random() < prob_high else low
+        ranks = [TRANSITION_INTENSITY_RANK.get(t, 0) for t in couple_pool]
+        rank_max = max(ranks)
+        p = TRANSITION_INTENSITY_PROBABILITY.get(self.current_state, 0.5)
+        weights = [p * r + (1 - p) * (rank_max + 1 - r) for r in ranks]
+        return random.choices(couple_pool, weights=weights, k=1)[0]
 
     def _get_fade_duration_ms(self):
         """Durata del Fade reattiva all'energia live: corto/veloce se il bass
@@ -988,7 +1755,7 @@ class HybridCouplesModel:
         """Ritorna tipo e durata della transizione
 
         - Raffica strobo attiva (frame intermedio): Taglio o White Fade, veloce
-        - wave_kick (entrata): SEMPRE Stinger, esclusivo
+        - wave_kick (entrata): stesso pool/meccanismo pesato del ciclo principale, durata reattiva all'energia
         - wave_kick (ritorno a _A): Fade
         - INTRO/BREAK (ciclo wave_kick<->_A): Fade
         - Ciclo energetico principale (BUILD/GROOVE/DROP/PEAK/RELAX): STESSA pool
@@ -1005,13 +1772,13 @@ class HybridCouplesModel:
             debug_log("[TRANS] MODALITA' DEGENERATA: lampeggio")
             return {"type": "Taglio", "duration_ms": 100, "is_return": False, "kick_mode": "flash_single"}
 
-        # CAMBIO COPPIA: transizione "firma" della nuova scena_A (vedi
-        # IDENTITY), un'unica volta all'ingresso. Controllato PRIMA del
-        # branch generico INTRO sotto, perche' current_state e' gia' INTRO
-        # a questo punto (impostato da decide_next_scene insieme al kind).
-        # Fallback al normale Fade se la scena_A non ha una firma valida
-        # (non in IDENTITY, o firma non disponibile in OBS - gia' filtrato
-        # da validate_scenes).
+        # CAMBIO COPPIA: transizione "firma" dell'identita' appena assegnata
+        # (vedi IDENTITY_SETS/_roll_new_identity), un'unica volta all'ingresso.
+        # Controllato PRIMA del branch generico INTRO sotto, perche'
+        # current_state e' gia' INTRO a questo punto (impostato da
+        # decide_next_scene insieme al kind). Fallback al normale Fade se
+        # l'identita' non ha una firma valida (transizione non disponibile
+        # in OBS - gia' filtrato da validate_scenes).
         if self.last_decision_kind == "couple_start":
             signature = self._get_identity().get("transition")
             fade_ms = self._get_fade_duration_ms()
@@ -1068,25 +1835,58 @@ class HybridCouplesModel:
                 "kick_mode": "crescendo"
             }
 
-        # FORCE: wave_kick SEMPRE Stinger in ENTRATA, bypassa tutto il resto
+        # FORCE: wave_kick in ENTRATA, bypassa tutto il resto.
+        # 2026-07-?? (operatore): era SEMPRE "Stinger" - scoperto che le
+        # impostazioni dello Stinger su questa installazione sono VUOTE
+        # (nessun video caricato, verificato via get_current_scene_transition())
+        # perche' Stinger accetta solo file video, non immagini (l'operatore
+        # voleva caricare un logo .png) - quindi non stava mai davvero
+        # facendo l'effetto "video flourish" per cui era stato scelto.
+        # Sostituito con un pool a caso tra Fade e "Digital Gltch" (nome
+        # esatto verificato via get_scene_transition_list - typo reale
+        # nell'installazione, non un errore di battitura qui), entrambe
+        # transizioni honeste su cosa fanno davvero.
+        #
+        # **Bug di durata trovato e corretto nello stesso momento**: i
+        # 20000ms fissi avevano senso SOLO con lo Stinger (durata FISSA lato
+        # OBS, quel valore probabilmente veniva ignorato) - con Fade/Digital
+        # Gltch (entrambe NON a durata fissa) viene rispettato per davvero,
+        # un crossfade di 20s REALI ad ogni ingresso in wave_kick, molto
+        # oltre il range normale (FADE_DURATION_RANGE, 500-2800ms) -
+        # osservato dal vivo: stati a bassa energia (dove wave_kick<->_A e'
+        # il ciclo dominante) diventati statici, scena_B quasi scomparsa.
+        # Corretto usando la stessa durata reattiva all'energia di ogni
+        # altro Fade nel codice, invece di un numero fisso slegato.
         if self.temp_b_scene == "wave_kick":
-            debug_log(f"[TRANS] wave_kick -> Stinger 20s")
-            return {"type": "Stinger", "duration_ms": 20000, "is_return": False, "kick_mode": "wave"}
+            # 2026-07-?? (operatore): riusa lo stesso pool/meccanismo pesato
+            # del ciclo principale (COUPLE_TRANSITIONS + _weighted_couple_
+            # transition) invece di un pair fisso (Fade, Digital Gltch) a
+            # parte - un solo posto dove il pool di transizioni e' definito.
+            couple_pool = COUPLE_TRANSITIONS.get(self.current_couple_a, ["Burn", "Displace"])
+            trans_type = self._weighted_couple_transition(couple_pool)
+            fade_ms = self._get_fade_duration_ms()
+            debug_log(f"[TRANS] wave_kick -> {trans_type} {fade_ms}ms")
+            return {"type": trans_type, "duration_ms": fade_ms, "is_return": False, "kick_mode": "wave"}
 
-        # BREAK: cut/fade alternati, reattivi alla velocita' del crollo bass
-        # (break brusco -> piu' probabile Taglio veloce; break lento -> Fade)
+        # BREAK: cut/fade/blur alternati, reattivi alla velocita' del crollo
+        # bass (break brusco -> piu' probabile Taglio veloce; break lento ->
+        # Fade o Blur, scelti a caso tra loro per varieta' - Taglio risultava
+        # dominante anche nei break lenti perche' l'unica alternativa era
+        # sempre Fade, mai qualcosa di diverso da un Taglio).
         if self.current_state == State.BREAK:
             drop_rate = max(0.0, self.last_bass_avg - self.last_bass)
             cut_prob = min(0.8, drop_rate / 30.0) * self._calm("cut")
             if random.random() < cut_prob:
                 trans_type, duration_ms = "Taglio", 300
             else:
-                trans_type, duration_ms = "Fade", self._get_fade_duration_ms()
+                trans_type = random.choice(["Fade", "Blur"])
+                duration_ms = self._get_fade_duration_ms()
             debug_log(f"[TRANS] BREAK reattivo: {trans_type} {duration_ms}ms (drop_rate={drop_rate:.1f}, cut_prob={cut_prob:.2f})")
             return {"type": trans_type, "duration_ms": duration_ms, "is_return": is_return}
 
-        # INTRO: ciclo wave_kick<->_A, per lo piu' Fade (Stinger gia' gestito
-        # sopra), con una probabilita' di Taglio al posto del Fade ("aumentiamo
+        # INTRO: ciclo wave_kick<->_A, per lo piu' Fade (l'ENTRATA in wave_kick
+        # e' gia' gestita sopra, sempre Fade 20s), con una probabilita' di
+        # Taglio al posto del Fade ("aumentiamo
         # il numero dei cut... anche in groove e intro")
         if self.current_state == State.INTRO:
             if random.random() < CUT_PROBABILITY_INTRO * self._calm("cut"):
@@ -1137,13 +1937,19 @@ class HybridCouplesModel:
 
         bass = audio_data.get("bass", 0)
         bass_avg = audio_data.get("bass_avg", 0)
+        bass_avg_long = audio_data.get("bass_avg_long", 0)
         is_kick = audio_data.get("is_kick", False)
         is_drop = audio_data.get("is_drop", False)
         bpm = audio_data.get("bpm", 0.0)
+        is_beat = audio_data.get("is_beat", False)
+        beat_count = audio_data.get("beat_count", 0)
 
         self.last_bass = bass
         self.last_bass_avg = bass_avg
+        self.last_bass_avg_long = bass_avg_long
         self.last_bpm = bpm
+        self.last_is_beat = is_beat
+        self.last_beat_count = beat_count
         couple_elapsed = current_time - self.couple_start_time
 
         # Default: nessun "kind" speciale finche' non impostato da un branch specifico
@@ -1215,24 +2021,121 @@ class HybridCouplesModel:
         prev_state = self.current_state
         self._update_state(bass, bass_avg, couple_elapsed, current_time)
 
+        # CAMBIO TRACCIA, ingresso in BREAK (vedi TRACK_CHANGE_* sopra):
+        # salva subito il BPM stabile di QUESTO istante, prima che il break
+        # stesso lo congeli (durante un break i kick si diradano/spariscono,
+        # quindi audio_analyzer smette di aggiornare la stima e resta
+        # fermo su questo valore per tutta la durata del break).
+        if prev_state != State.BREAK and self.current_state == State.BREAK:
+            self.break_entered_at = current_time
+            self.bpm_at_break_start = self.last_bpm
+
         # Rileva uscita da BREAK: serve per estendere lo spazio di wave_kick
         # in BUILD/GROOVE durante una risalita rapida (vedi _wave_kick_eligible)
         if prev_state == State.BREAK and self.current_state != State.BREAK:
             self.break_exit_time = current_time
             self.bass_at_break_exit = bass
+            # BUG TROVATO 2026-07-17: audio_analyzer.py azzera beat_count
+            # all'uscita da BREAK (resync naturale, per design), ma
+            # monitor_last_flip_bar restava al valore vecchio (es. bar 195)
+            # - con current_bar ripartito da 0, il confronto
+            # "(current_bar - monitor_last_flip_bar) >= bars_needed" diventa
+            # sempre falso (negativo contro positivo) finche' beat_count non
+            # ricresce oltre il vecchio valore, potenzialmente per minuti:
+            # la configurazione (es. "both_off", entrambi i monitor neri)
+            # resta bloccata tutto quel tempo invece di ririsolversi al
+            # prossimo bivio. Azzerare qui, in sync con l'azzeramento di
+            # beat_count, risolve alla radice.
+            self.monitor_last_flip_bar = 0
+            self.light_last_flip_bar = 0  # stesso motivo di monitor_last_flip_bar sopra (Step 3 piano luci)
+
+            # CAMBIO TRACCIA: non decidiamo SUBITO (il BPM appena uscito dal
+            # break non si e' ancora ristabilizzato sui nuovi kick, vedi
+            # TRACK_CHANGE_CHECK_DELAY_S) - schedula un controllo differito,
+            # eseguito piu' sotto ad ogni tick finche' non e' il momento.
+            break_duration = current_time - self.break_entered_at
+            if break_duration >= TRACK_CHANGE_MIN_BREAK_S and self.bpm_at_break_start > 0:
+                self.break_duration_pending = break_duration
+                self.track_change_pending_check_at = current_time + TRACK_CHANGE_CHECK_DELAY_S
+            else:
+                self.track_change_pending_check_at = 0.0
+
+        # CAMBIO TRACCIA: controllo differito (vedi sopra) - eseguito una
+        # sola volta, TRACK_CHANGE_CHECK_DELAY_S dopo l'uscita dal break
+        # candidato, quando il BPM ha avuto il tempo di ristabilizzarsi sui
+        # nuovi kick.
+        if self.track_change_pending_check_at > 0 and current_time >= self.track_change_pending_check_at:
+            bpm_delta = abs(self.last_bpm - self.bpm_at_break_start) if self.last_bpm > 0 else 0.0
+            cooldown_ok = (current_time - self.last_track_change_time) >= TRACK_CHANGE_COOLDOWN_S
+            if bpm_delta >= TRACK_CHANGE_BPM_DELTA and cooldown_ok:
+                self.last_track_change_time = current_time
+                self.track_change_intro_until = current_time + self._intro_window()
+                msg = (f"[TRACK-CHANGE] rilevato: break={self.break_duration_pending:.1f}s "
+                       f"bpm {self.bpm_at_break_start:.0f}->{self.last_bpm:.0f} (delta={bpm_delta:.0f}) "
+                       f"- forzo INTRO per {self._intro_window():.0f}s")
+                print(msg)
+                debug_log(msg)
+            else:
+                debug_log(f"[TRACK-CHANGE] non rilevato: break={self.break_duration_pending:.1f}s "
+                           f"bpm {self.bpm_at_break_start:.0f}->{self.last_bpm:.0f} (delta={bpm_delta:.0f}, "
+                           f"soglia={TRACK_CHANGE_BPM_DELTA:.0f}) cooldown_ok={cooldown_ok}")
+            self.track_change_pending_check_at = 0.0  # controllo consumato, una sola volta
+
+        # FLASH NERO PRE-DROP (vedi RUNUP_* e _detect_runup): la risalita si
+        # considera risolta (si puo' riarmare un nuovo flash) quando si entra
+        # DAVVERO in DROP/PEAK (l'anticipazione ha "fatto centro") o quando
+        # scade RUNUP_FLASH_MAX_ACTIVE_S senza che ci sia mai arrivata
+        # (risalita stagnante/fallita - non deve restare bloccata per sempre).
+        if self.runup_flash_active:
+            resolved_by_arrival = self.current_state in (State.DROP, State.PEAK)
+            resolved_by_timeout = (current_time - self.runup_flash_start_time) > RUNUP_FLASH_MAX_ACTIVE_S
+            if resolved_by_arrival or resolved_by_timeout:
+                self.runup_flash_active = False
+        elif (self.current_state in RUNUP_ELIGIBLE_STATES
+                and (current_time - self.last_runup_flash_time) > RUNUP_FLASH_COOLDOWN
+                and self._detect_runup()):
+            self.runup_flash_active = True
+            self.runup_flash_start_time = current_time
+            self.last_runup_flash_time = current_time
+            self.pre_drop_flash_pending = True
+            debug_log(f"[RUNUP] flash pre-drop innescato (stato={self.current_state.name})")
 
         # ====================================================================
-        # 1. TIMER COPPIA SCADUTO? (4 minuti) - saltato se loop_scene attivo
-        # (hotkey OBS: "questa scena_A sta funzionando, non portarmela via" -
-        # il ciclo audio-reattivo interno kick->B/wave_kick/colore prosegue
-        # normalmente, resta congelato solo IL CAMBIO di scena_A).
+        # 1. TIMER COPPIA SCADUTO? Finestra [MIN, MAX] invece di istante
+        # fisso (vedi commento su COUPLE_DURATION_MIN/MAX in __init__): dopo
+        # il MIN, aspetta il primo momento buono (ingresso in BREAK) per
+        # scattare, invece di tagliare a caso in mezzo a un DROP/BUILD - il
+        # MAX resta un tetto di sicurezza se la musica non scende mai.
+        # Saltato se loop_scene attivo (hotkey OBS: "questa scena_A sta
+        # funzionando, non portarmela via" - il ciclo audio-reattivo interno
+        # kick->B/wave_kick/colore prosegue normalmente, resta congelato
+        # solo IL CAMBIO di scena_A).
         # ====================================================================
-        if couple_elapsed > self.COUPLE_DURATION and not self.loop_scene:
-            if current_time - self.meta_couple_start_time > META_COUPLE_DURATION:
-                self._select_new_meta_pair()
-                self.meta_couple_start_time = current_time
+        couple_good_moment = self.current_state == State.BREAK
+        couple_ceiling_hit = couple_elapsed >= self.COUPLE_DURATION_MAX
+        couple_due = couple_elapsed >= self.COUPLE_DURATION_MIN and couple_good_moment
+        if (couple_ceiling_hit or couple_due) and not self.loop_scene:
+            # Il timer META_COUPLE_DURATION vale SOLO dopo il giro iniziale
+            # (vedi _select_new_couple/startup_tour_bag) - durante il giro,
+            # il passaggio alla prima coppia fissa e' gia' gestito li'
+            # (a copertura completa, non a tempo).
+            if self.startup_tour_done:
+                meta_elapsed = current_time - self.meta_couple_start_time
+                meta_ceiling_hit = meta_elapsed >= META_COUPLE_DURATION_MAX
+                meta_due = meta_elapsed >= META_COUPLE_DURATION_MIN and couple_good_moment
+                if meta_ceiling_hit or meta_due:
+                    self._select_new_meta_pair()
+                    self.meta_couple_start_time = current_time
+            tour_was_active = not self.startup_tour_done
             self.current_couple_a = self._select_new_couple()
+            if tour_was_active and self.startup_tour_done:
+                # Il giro e' appena finito dentro _select_new_couple() (che
+                # ha gia' chiamato _select_new_meta_pair() per la prima
+                # coppia fissa) - la finestra dei 15-25min di QUELLA coppia
+                # parte da ora, non dall'avvio di pupa.py.
+                self.meta_couple_start_time = current_time
             self.current_b_scene = self._roll_next_b_scene()
+            self._roll_new_identity()
             self.couple_start_time = current_time
             self.state_start_time = current_time
             self.current_state = State.INTRO
@@ -1245,10 +2148,11 @@ class HybridCouplesModel:
             # normale Fade/Taglio di INTRO invece della firma della nuova coppia.
             self.last_decision_kind = "couple_start"
 
+            timer_label = "tetto max" if couple_ceiling_hit and not couple_good_moment else "su break"
             log_decision(
                 from_scene=current_scene,
                 to_scene=self.current_couple_a,
-                reason=f"TIMER TIMER 4min ({couple_elapsed:.0f}s) | State: {self.current_state.value}",
+                reason=f"TIMER coppia {timer_label} ({couple_elapsed:.0f}s) | State: {self.current_state.value}",
                 energy="CAMBIO COPPIA",
                 duration=self._get_fade_ms() / 1000,
                 logger=logger
@@ -1262,7 +2166,7 @@ class HybridCouplesModel:
         if (current_time - self.last_switch_time) < debounce:
             return None
 
-        couple_pct = (couple_elapsed / self.COUPLE_DURATION) * 100
+        couple_pct = (couple_elapsed / self.COUPLE_DURATION_MAX) * 100
 
         # ====================================================================
         # 3. wave_kick <-> _A: sempre in INTRO/BREAK, oppure in BUILD/GROOVE
@@ -1326,10 +2230,17 @@ class HybridCouplesModel:
         # a kick reali, visto che in quella fase l'energia e' gia' attiva.
         if wave_eligible and self.in_scene_a and (intro_or_break or is_kick):
             if self.current_state == State.INTRO:
-                prob_wave = max(0.2, 1.0 - couple_elapsed / 30.0)
+                # Floor alzato 0.2->0.4 (operatore: "_kick appare all'inizio
+                # di un cambio e poi basta") - decadeva troppo verso un
+                # minimo basso, restava presente solo nei primissimi secondi.
+                prob_wave = max(0.4, 1.0 - couple_elapsed / self._intro_window())
             elif self.current_state == State.BREAK:
+                # Floor alzato 0.3->0.5 e finestra di decadimento allungata
+                # 20s->40s (operatore: "_wave solo all'accenno di un break")
+                # - stesso problema, decadeva troppo in fretta verso un
+                # minimo basso.
                 time_in_break = current_time - self.state_start_time
-                prob_wave = max(0.3, 1.0 - time_in_break / 20.0)
+                prob_wave = max(0.5, 1.0 - time_in_break / 40.0)
             else:
                 # BUILD/GROOVE in recupero da break: piu' spazio a wave_kick
                 # quanto piu' veloce e' la risalita, decade con la finestra
@@ -1432,7 +2343,7 @@ class HybridCouplesModel:
                 self.last_switch_time = current_time
                 alt_scene = self.current_b_scene if self.in_scene_a else self.current_couple_a
                 self._trigger_strobe(current_scene, CUT_BURST_STEPS, alt_scene=alt_scene,
-                                      transition_choice="Taglio", interval=CUT_BURST_INTERVAL)
+                                      transition_choice="Taglio", interval=self._get_strobe_interval())
                 self.in_pullback = is_pullback_now
                 return self._advance_burst(current_time, current_scene, logger)
         self.in_pullback = is_pullback_now
@@ -1573,10 +2484,69 @@ def force_couple(scene_name, current_time):
     model.force_couple(scene_name, current_time)
 
 def get_identity_wave_kick_variant():
-    """Variante wave_kick dedicata alla scena_A corrente (vedi IDENTITY in
-    scenes_config.yaml), o None se non definita/non disponibile in OBS -
+    """Variante wave_kick dell'identita' assegnata alla coppia corrente
+    (vedi IDENTITY_SETS in scenes_config.yaml), o None se non definita/non
+    disponibile in OBS -
     pupa.py ricade sulla selezione random generica in quel caso."""
     return model._get_identity().get("wave_kick")
+
+def get_identity_waveform():
+    """Scena waveform_color dell'identita' assegnata alla coppia corrente
+    (vedi IDENTITY_SETS in scenes_config.yaml) - sostituisce ago_talk come
+    scena alternativa a wave_kick (vedi WAVE_KICK_ALT_SCENES in pupa.py),
+    deve comparire assieme al colore/kick della STESSA identita'. None se
+    non definita/non disponibile in OBS."""
+    return model._get_identity().get("waveform")
+
+def get_identity_color_name():
+    """Nome della scena _color (es. 'red_color') dell'identita'
+    assegnata alla coppia corrente (vedi IDENTITY_SETS in scenes_config.yaml)
+    - usato da pupa.py per pilotare l'overlay 'color_overlay' (2026-07-16,
+    nidificato in scene_A/_B/kick) cosi' il tint segue sempre lo stesso
+    colore del flash/waveform della stessa identita'. None se non definita."""
+    return model._get_identity().get("color")
+
+def get_black_pause_breath_phase(current_time):
+    """Fase 0.0-1.0 della PAUSA NERA corrente (vedi overlap_is_black_pause
+    in _maybe_trigger_overlap), o None se non ce n'e' una attiva ORA - usato
+    da pupa.py per sintetizzare un respiro in-out-in-out sull'INTERA durata
+    della pausa (non agganciato a battuta come il respiro continuo di
+    black_overlay), "le pause nere sono sempre lunghe ed e' li' che ci
+    vorrebbe il respiro"."""
+    m = model
+    if not (m.overlap_active and m.overlap_is_black_pause):
+        return None
+    total = m.overlap_hold_until - m.overlap_start_time
+    if total <= 0:
+        return None
+    elapsed = current_time - m.overlap_start_time
+    return max(0.0, min(1.0, elapsed / total))
+
+def get_and_clear_pre_drop_flash():
+    """Consuma (one-shot) il flag di flash nero pre-drop (vedi RUNUP_* e
+    _detect_runup in HybridCouplesModel) - True al massimo una volta per
+    risalita rilevata, poi torna False finche' non ne scatta una nuova.
+    Usato da pupa.py per pilotare un picco temporaneo di 'black_overlay'."""
+    pending = model.pre_drop_flash_pending
+    model.pre_drop_flash_pending = False
+    return pending
+
+def is_strobe_burst_active():
+    """True mentre una raffica strobo/lampo/cut e' in corso (vedi
+    _trigger_strobe/_advance_burst) - usato da pupa.py per sincronizzare il
+    canale Strobe dei fari fisici via qlc_controller (2026-07-24)."""
+    return model.burst_active
+
+
+def is_strobe_frame_on():
+    """True SOLO durante il frame 'acceso' (scena/colore alternato, vedi
+    _advance_burst: burst_step pari) di una raffica in corso - a differenza
+    di is_strobe_burst_active() (True per l'intera raffica, ON+OFF), questa
+    distingue i singoli frame per pilotare il Master del fixture fisico a
+    tempo reale invece del canale Strobe autonomo (2026-07-29, Step 1 del
+    piano luci - vedi wiggly-moseying-blum.md). False se nessuna raffica e'
+    attiva o durante il frame 'spento'."""
+    return model.burst_active and (model.burst_step % 2 == 0)
 
 def get_current_couple_a():
     """Scena_A su cui il modello crede di trovarsi ORA (randomizzata da
@@ -1618,6 +2588,19 @@ def get_monitor_outputs(current_time):
     tick (solo Linux)."""
     return model.get_monitor_outputs(current_time)
 
+def get_ambient_light(current_time):
+    """Intensita' (0.0-1.0) del wash ambient per gli stati di quiete
+    (INTRO/BREAK/RELAX) - None se lo stato corrente non e' di quiete, vedi
+    HybridCouplesModel.get_ambient_light. Usato da pupa.py per sostituire il
+    pulso a kick sui fari fisici durante questi stati (2026-07-29, Step 2)."""
+    return model.get_ambient_light(current_time)
+
+def get_light_outputs(current_time):
+    """Quale/i dei 2 fari fisici mostrare 'in vista' ora - vedi
+    HybridCouplesModel.get_light_outputs. Chiamato da pupa.py ad ogni tick
+    per attenuare il fixture non 'in vista' (2026-07-29, Step 3)."""
+    return model.get_light_outputs(current_time)
+
 
 _UNIVERSAL_FALLBACK_TRANSITIONS = ["Cut", "Taglio", "Fade", "Dissolvenza"]
 
@@ -1652,7 +2635,7 @@ def validate_scenes(available_scenes, available_transitions):
     - BLACK_PAUSE_SCENE non trovata: pausa nera disattivata (probabilita' a
       zero) invece di tentare switch a vuoto verso una scena inesistente.
     """
-    global COUPLES, COUPLE_TRANSITIONS, DEGENERATE_MODE, STROBE_COLOR_POOL, BLACK_PAUSE_PROBABILITY, IDENTITY
+    global COUPLES, COUPLE_TRANSITIONS, DEGENERATE_MODE, STROBE_COLOR_POOL, BLACK_PAUSE_PROBABILITY, IDENTITY_SETS, ALL_B_SCENES, META_PAIR_DUOS
 
     available_scenes_set = set(available_scenes)
     available_transitions = list(available_transitions)
@@ -1681,6 +2664,20 @@ def validate_scenes(available_scenes, available_transitions):
 
     COUPLES = filtered_couples
     COUPLE_TRANSITIONS = filtered_transitions
+    ALL_B_SCENES = _compute_all_b_scenes()  # ricalcolato sul COUPLES appena filtrato, vedi commento sopra la sua definizione
+
+    # META_PAIR_DUOS: toglie dai duo le scene_A rimosse sopra (non in
+    # COUPLES) - un duo con 1 sola scena_A superstite resta cosi' com'e'
+    # (caso degenere gia' gestito da _select_new_couple, nessun crash), un
+    # duo svuotato del tutto viene tolto dalla lista.
+    filtered_duos = []
+    for duo in META_PAIR_DUOS:
+        available_duo = [a for a in duo if a in COUPLES]
+        if len(available_duo) < len(duo):
+            debug_log(f"[VALIDATE] meta_pair_duo {duo} ridotto a {available_duo}")
+        if available_duo:
+            filtered_duos.append(available_duo)
+    META_PAIR_DUOS = filtered_duos
 
     if not COUPLES or len(available_scenes_set) <= 1:
         DEGENERATE_MODE = True
@@ -1696,36 +2693,44 @@ def validate_scenes(available_scenes, available_transitions):
     if available_colors != STROBE_COLOR_POOL:
         debug_log(f"[VALIDATE] STROBE_COLOR_POOL ridotto a {available_colors} "
                   f"(mancava/mancavano {set(STROBE_COLOR_POOL) - set(available_colors)})")
-    STROBE_COLOR_POOL = available_colors or ["white_master"]  # ultima rete di sicurezza, mai lista vuota
+    # Ultima rete di sicurezza: se non sopravvive NESSUN colore (nemmeno
+    # white_color), ricadi su black_color - "flash colorati e strobo bianchi
+    # sostituiti dal nero se non presenti in OBS" (scelta esplicita
+    # dell'operatore, non solo un default tecnico). Se anche black_color
+    # manca, STROBE_COLOR_POOL resta vuoto: nessuna scena su cui flashare,
+    # gestito a valle come le altre liste vuote.
+    STROBE_COLOR_POOL = available_colors or ([BLACK_PAUSE_SCENE] if BLACK_PAUSE_SCENE in available_scenes_set else [])
 
     if BLACK_PAUSE_SCENE not in available_scenes_set:
         debug_log(f"[VALIDATE] {BLACK_PAUSE_SCENE} non trovata, pausa nera disattivata")
         BLACK_PAUSE_PROBABILITY = 0.0
 
-    # IDENTITA' per scena_A: scarta le entry di scene_A non sopravvissute alla
-    # validazione, e per quelle rimaste toglie i singoli campi (transition/
-    # color/wave_kick) non ancora presenti in OBS - _get_identity() ricade sui
+    # IDENTITA' (bundle indipendenti dalla scena_A, vedi IDENTITY_SETS): per
+    # ciascun bundle toglie i singoli campi (transition/color/wave_kick/
+    # waveform) non ancora presenti in OBS - _get_identity() ricade sui
     # meccanismi generici pre-esistenti quando un campo manca, invece di
     # tentare uno switch a vuoto verso una transizione/scena inesistente.
-    filtered_identity = {}
-    for a_scene, entry in IDENTITY.items():
-        if a_scene not in COUPLES:
-            continue
+    filtered_sets = []
+    for i, entry in enumerate(IDENTITY_SETS):
         fixed_entry = dict(entry)
         if fixed_entry.get("transition") not in available_transitions:
-            debug_log(f"[VALIDATE] identity[{a_scene}].transition '{fixed_entry.get('transition')}' "
+            debug_log(f"[VALIDATE] identity_sets[{i}].transition '{fixed_entry.get('transition')}' "
                       f"non disponibile, tolta (fallback generico)")
             fixed_entry.pop("transition", None)
         if fixed_entry.get("color") not in available_scenes_set:
-            debug_log(f"[VALIDATE] identity[{a_scene}].color '{fixed_entry.get('color')}' "
+            debug_log(f"[VALIDATE] identity_sets[{i}].color '{fixed_entry.get('color')}' "
                       f"non disponibile, tolta (fallback generico)")
             fixed_entry.pop("color", None)
         if fixed_entry.get("wave_kick") not in available_scenes_set:
-            debug_log(f"[VALIDATE] identity[{a_scene}].wave_kick '{fixed_entry.get('wave_kick')}' "
+            debug_log(f"[VALIDATE] identity_sets[{i}].wave_kick '{fixed_entry.get('wave_kick')}' "
                       f"non disponibile, tolta (fallback generico)")
             fixed_entry.pop("wave_kick", None)
-        filtered_identity[a_scene] = fixed_entry
-    IDENTITY = filtered_identity
+        if fixed_entry.get("waveform") not in available_scenes_set:
+            debug_log(f"[VALIDATE] identity_sets[{i}].waveform '{fixed_entry.get('waveform')}' "
+                      f"non disponibile, tolta (fallback generico)")
+            fixed_entry.pop("waveform", None)
+        filtered_sets.append(fixed_entry)
+    IDENTITY_SETS = filtered_sets
 
     return {"couples": COUPLES, "couple_transitions": COUPLE_TRANSITIONS, "degenerate": DEGENERATE_MODE,
             "strobe_color_pool": STROBE_COLOR_POOL, "black_pause_enabled": BLACK_PAUSE_PROBABILITY > 0}

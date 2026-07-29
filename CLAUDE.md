@@ -2,60 +2,45 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+Keep this file **short**. It's an orientation doc for a fresh AI session, not the architecture reference — that's `PUPA_ARCHITECTURE.md`. If you're about to add a paragraph explaining *how* something works, it probably belongs there or in `OBS_CONFIG.md` instead, with just a pointer left here.
+
 ## Project Overview
 
-PUPA is a real-time "VJ brain" that automates OBS Studio scene switching based on live audio analysis. It listens to a system audio input device, extracts bass/mid/high frequency bands, detects kicks/drops, and drives scene changes over the OBS WebSocket v5 API. All code and logs are Italian/English mixed (comments, print statements, and log messages are largely in Italian).
+PUPA is a real-time "VJ brain" that automates OBS Studio scene switching based on live audio analysis. It listens to a system audio input device, extracts bass/mid/high frequency bands, detects kicks/drops/breaks, and drives scene changes over the OBS WebSocket v5 API. Code and logs are Italian/English mixed (comments and print/log messages are largely in Italian).
 
-Not a git repository — there is no version control in this directory, so treat file history (see "File Naming Conventions" below) as the only record of prior iterations.
+This **is** a git repository (GitHub: `fehrdai/pupa`) — two machines run PUPA against their own local OBS instance: a Windows dev/test box and a Linux live-show rig (`farefesta@192.168.1.107`, SSH key `~/.ssh/pupa_linux`). Each machine has its own `secrets_local.py` (gitignored, not synced) with machine-specific OBS host/port/password and audio device settings — see `secrets_local.example.py` for the template. Quick iteration during a work session typically happens via direct `scp` deploy + remote compile-check rather than a full `git commit`/`push`/`pull` cycle each time; commit to git for durable snapshots, not every tweak.
 
 ## Commands
 
-There is no build step, package manifest, or test suite — this is a small script-based project run directly with Python.
+No build step or test suite — a script-based project run directly with Python.
 
 ```bash
-# Run the main VJ brain loop (connects to OBS + starts audio capture)
-python pupa.py
-
-# List available audio input devices (needed to find the correct device ID)
-python list_audio_devices.py
-
-# Quick standalone check that the OBS WebSocket connection/credentials work
-python test_obs.py
+python pupa.py                 # main VJ brain loop (connects to OBS + starts audio capture)
+python list_audio_devices.py   # list audio input devices (to find AUDIO_DEVICE_NAME/PULSE_SOURCE)
+python test_obs.py             # quick standalone check that the OBS WebSocket connection/credentials work
+python -m py_compile *.py      # compile-check after any edit, on BOTH machines if deployed to both
 ```
 
-Dependencies (no requirements.txt exists; install manually as needed):
-```bash
-pip install sounddevice numpy obsws-python pyyaml
-```
+Dependencies: `pip install -r requirements.txt` (sounddevice, numpy, obsws-python, pyyaml).
 
-## Architecture
+## Where things live
 
-### Active runtime (files actually imported by `pupa.py`)
-- **`pupa.py`** — Entry point / main loop. Connects to OBS, starts audio capture, polls at ~20Hz (`time.sleep(0.05)`), and on each frame asks `brain.py` for the next scene and tells `obs_controller.py` to switch if needed.
-- **`obs_controller.py`** — Thin wrapper around `obsws_python.ReqClient` (OBS WebSocket v5). Handles scene caching, current-scene lookup, and `switch_scene()` with an optional Fade transition override.
-- **`audio_analyzer.py`** — Runs a `sounddevice.InputStream` callback that does an FFT per audio block, extracts bass/mid/high band magnitudes with AGC-style dynamic normalization, and derives `is_kick` / `is_drop` / `is_break` boolean events from bass deltas and thresholds.
-- **`brain.py`** — Decision logic, currently the "Hybrid Couples Model" (`HybridCouplesModel`, module-level singleton `model`). Scenes are organized as **couples**: a main scene (`*_A`) paired with a pool of filler/transition scenes (`*_B`). Logic: stay on the current `_A` scene for a fixed `COUPLE_DURATION` (240s); within that window, a kick toggles A↔B, and a drop forces an immediate return to A; once the 4-minute timer expires, a new (non-repeating, tracked via a `deque(maxlen=5)`) couple is chosen.
-- **`logger.py`** — Sets up a `logging.FileHandler` writing to `logs/pupa.log` and exposes `log_decision(...)` for structured scene-switch log lines.
+- **`PUPA_ARCHITECTURE.md`** — what PUPA is, how it decides what to show, the audio pipeline, file map, current state, known bugs, roadmap.
+- **`OBS_CONFIG.md`** — the OBS side specifically: scene collection structure, the `_A`/`_B` naming contract, WebSocket API gotchas, hotkeys, setup steps.
+- **`LIGHTS_CONFIG.md`** — the QLC+/lighting side: OS2L channel map per fixture, the single-VC-page requirement, Web API setup for diagnostics.
+- **`PUPA_DEVELOPMENT_LOG.md`** — chronological technical diary. Terse, for picking up context fast, not a narrative.
+- **`LINUX_PORTING.md`** — deployment/setup guide for a new or reconnected machine.
 
-### Important: config files are not wired into the active code path
-`config.yaml`, `COUPLES_CONFIG.yaml`, and `scenes.yaml` exist but **are not loaded by `pupa.py` or `brain.py`** — the current versions hardcode their own values instead:
-- `pupa.py` has a hardcoded `CONFIG` dict (OBS host/port/password, audio device ID) at the top of the file, rather than reading `config.yaml`.
-- `brain.py` has a hardcoded `COUPLES` dict (scene pairing + durations) at the top of the file, rather than reading `COUPLES_CONFIG.yaml`.
-- `scenes.yaml` is descriptive documentation of the scene pool/tags but isn't parsed anywhere in the active code.
+## Mandatory doc-update policy
 
-If asked to change OBS credentials, audio device, couple durations, or the B-scene pools, edit the hardcoded values directly in `pupa.py` / `brain.py` — editing the YAML files alone will have no effect unless the loading logic is added.
+Agreed with the operator 2026-07-17 — **follow this without being asked each time**:
+- **`CLAUDE.md`, `OBS_CONFIG.md`, `PUPA_DEVELOPMENT_LOG.md`: update at the close of every working session**, even a short one. A few lines is enough; the point is nothing significant goes undocumented.
+- **`PUPA_ARCHITECTURE.md`, `LINUX_PORTING.md`: update occasionally** — when a stable feature actually lands, an unresolved bug is found, or a concrete future project appears (e.g. QLC+ integration). Not every session.
 
-### File naming conventions (iteration history, no git)
-Since there's no VCS, prior versions are kept side-by-side using suffixes rather than being deleted:
-- `*_old.py` / `*._old.py` (e.g. `pupa_old.py`, `brain._old.py`, `obs_controller_old.py`, `logger_old.py`, `scenes_old.yaml`, `config_old.yaml`) — superseded versions of the corresponding active file. Not imported by anything active.
-- `*_FIXED*` (e.g. `config_FIXED_pwd.yaml`) — patched variants referenced by the migration docs, sometimes not yet merged into the active file.
-- `obs_control.py` vs `obs_controller.py` — `obs_control.py` is the older/simpler OBS wrapper used only by `pupa_old.py`; `obs_controller.py` is the active one used by `pupa.py`.
-- `build_pupa.py` — a one-off scaffolding script from the original v0.1 "Heartbeat" setup that writes out an entire initial project structure (config.yaml, scenes.yaml, obs_controller.py, brain.py, logger.py, pupa.py, README.md) as string literals. It's a historical setup generator, not part of the runtime.
-- Root-level `.md` files (`README_MIGRATION.md`, `FILE_CHECKLIST.md`, `SETUP_v04_COUPLES.md`) are migration/setup notes for specific version bumps (v0.3 Kill Switch → v0.4 Disciplined Couples), written as changelogs/instructions rather than living documentation.
+## Known non-obvious behavior
 
-### OBS scene naming contract
-Scene names in OBS must match the `_A` / `_B` suffix convention used in `brain.py`'s `COUPLES` dict exactly (case-sensitive) — `_A` scenes are the "body" visuals, `_B` scenes are audio-reactive filler/transition shaders. `scenes.yaml` documents the intended tag/energy metadata per scene even though it isn't parsed at runtime.
-
-### Known non-obvious behavior
-- `pupa.py`'s `CONFIG` currently contains a real OBS WebSocket password in plaintext, matching the value duplicated across `config.yaml`, `test_obs.py`, and several `*_old.py` files.
-- The kill-switch (RMS silence detection → force black scene) described in `README_MIGRATION.md` for v0.3 is **not present** in the current `brain.py`/`audio_analyzer.py` — it appears to have been dropped when moving to the v0.4 "Couples" model.
+- `scenes_config.yaml` **is** loaded at runtime (`brain.py`'s `_load_scenes_config()`) and validated against whatever OBS actually has (`validate_scenes()` in `pupa.py` at startup) — unlike a config file, editing it has a real effect. See `OBS_CONFIG.md` for its structure.
+- `scenes_config.yaml` is now **PUPA-generated**: `brain.discover_and_merge_config()` reads OBS's scene-naming convention (`_A`/`_B`/`_kick`/`_color`/`_wave`, `_color` scenes containing a `slideshow`-kind source detected as slides) and fills in whatever the file doesn't already specify. No scene names are hardcoded in Python anymore — see `OBS_CONFIG.md` for the full naming contract.
+- OBS credentials/audio device: per-machine in `secrets_local.py`, not hardcoded in `pupa.py`.
+- Scene names in OBS must match the `_A`/`_B`/`_kick`/`_color`/`_wave` suffix convention (`scene_discovery.py`) exactly (case-sensitive), except `black_color` which is the one mandatory name (fallback + warning if missing).
+- QLC+ lighting sync (`qlc_controller.py`, OS2L protocol, TCP port 9996) mirrors PUPA's color/strobe/ambient decisions onto DMX channels when QLC+ is running — graceful no-op if unreachable, auto-reconnects if QLC+ starts late or drops mid-show. Strobe is frame-accurate via Master (not the fixture's own autonomous Strobe channel). See `LIGHTS_CONFIG.md` for the channel map and setup requirements (single VC page!), `PUPA_DEVELOPMENT_LOG.md` for the build/debug story.

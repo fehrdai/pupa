@@ -1,0 +1,74 @@
+# Configurazione scene/coppie/transizioni di PUPA.
+# Se questo file manca o e' invalido, brain.py usa gli stessi valori come
+# fallback hardcoded (nessuna rottura per chi non lo tocca).
+#
+# All'avvio, pupa.py confronta questa configurazione con le scene e le
+# transizioni REALMENTE presenti nell'installazione OBS collegata, e adatta
+# di conseguenza (scene_B mancanti tolte dal pool, transizioni mancanti
+# sostituite con Cut/Fade nativi OBS, coppie senza scene_A rimosse). Se
+# resta una sola scena in tutto, PUPA lampeggia su quella invece di
+# alternare A/B.
+
+# RISTRUTTURAZIONE 2026-07-15: da 8 a 4 scene_A, ognuna con UNA sola scena_B
+# dedicata (non piu' un pool di 2 condiviso a coppie). I vecchi nomi
+# urbanfree_A/psicodance_A/segnali_A/strobo_A sopravvivono solo come nomi di
+# scena_B (stesso materiale visivo, ruolo diverso).
+#
+# "slide" (2026-07-16): scena con 2 sorgenti slideshow_v2 ("Presentazione di
+# immagini"/"Presentazione di immagini 2"), aggiunta come 5a scena_B nel pool
+# CONDIVISO (ALL_B_SCENES in brain.py, gia' unificato per tutte le scene_A -
+# basta comparire sotto una qualsiasi scena_A qui sotto). Per ora avanza sui
+# kick solo la prima sorgente (vedi SLIDESHOW_SOURCE in pupa.py), la seconda
+# resta ferma finche' non si decide come usarla.
+couples:
+  futureflash_A: [urbanfree_B, slide]
+  kusanagi_A:    [strobo_B]
+  montezuma_A:   [psicodance_B]
+  mri_A:         [segnali_B]
+
+couple_transitions:
+  montezuma_A:   [Burn, Blur]
+  kusanagi_A:    [Burn, Blur]
+  mri_A:         [Displace, Blur]
+  futureflash_A: [Burn, Displace]
+
+special_scenes:
+  wave_kick: wave_kick
+  strobo: white_master   # rinominata da strobo_B
+  black: black_master
+
+# Pool di colori per la raffica strobo/lampo singolo: ad ogni raffica se ne
+# sceglie uno a caso (stesso colore per tutti i frame di QUELLA raffica, non
+# cambia a meta'). Se alcuni non esistono ancora in OBS, validate_scenes()
+# li toglie automaticamente dal pool.
+strobe_color_pool: [white_master, red_master, blue_master, yellow_master, green_master]
+
+# IDENTITA' (RISTRUTTURATA 2026-07-15): non piu' fissa per scena_A - le 4
+# "identita'" (transizione firma + colore + variante kick + waveform) sono
+# ora SLEGATE dalle scene_A e ruotano in modo indipendente (mazzo
+# mescolato, vedi self.identity_shuffle_bag in brain.py), cosi' ogni
+# scena_A puo' comparire nel tempo con colori/kick diversi invece di uno
+# fisso sempre uguale. "waveform" sostituisce ago_talk come scena
+# alternativa a wave_kick (vedi WAVE_KICK_ALT_SCENES in pupa.py) - deve
+# sempre comparire assieme al colore/kick della STESSA identita', mai
+# mescolata con un'altra.
+identity_sets:
+  - {transition: Spiral,       color: red_master,    wave_kick: kick1, waveform: waveform_red}
+  - {transition: Diaframmatic, color: blue_master,   wave_kick: kick3, waveform: waveform_blue}
+  - {transition: Circles,      color: yellow_master, wave_kick: kick2, waveform: waveform_yellow}
+  - {transition: Fractal,      color: green_master,  wave_kick: kick4, waveform: waveform_green}
+
+# META-COPPIE (RIPRISTINATO 2026-07-21): 2 coppie FISSE di scene_A per la
+# finestra larga di rotazione (META_COUPLE_DURATION in brain.py, 15-25min) -
+# per quella finestra _select_new_couple() attinge SOLO dalla coppia
+# attiva, alternandosi ogni COUPLE_DURATION (2.5-6min) come previsto.
+# Sostituisce un calcolo automatico (raggruppava le scene_A per pool_B
+# condiviso) che la ristrutturazione 2026-07-15 aveva reso vacuo: con un
+# pool_B ormai dedicato a testa, ogni gruppo finiva per avere 1 sola
+# scena_A, bloccando l'intera finestra di 15-25min su una sola scena_A
+# invece di alternarne 2 - scoperto dal vivo il 2026-07-21 (futureflash_A
+# rimasta la stessa per 15+ min, 5 "CAMBIO COPPIA" di fila che ripescavano
+# se stessa).
+meta_pair_duos:
+  - [futureflash_A, kusanagi_A]
+  - [montezuma_A, mri_A]

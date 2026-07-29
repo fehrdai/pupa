@@ -1,315 +1,74 @@
-# PUPA VJ Brain - Architecture & Technical Spec
+# PUPA — Architecture & Technical Spec
 
-**Version:** v0.6 (Unified Energy-Reactive Model + Strobe Burst + Sovrapposizioni + Scale-to-sound)
-**Last Updated:** 2026-07-02
-**Status:** ⚠️ PAUSED — scale-to-sound funziona in isolamento (verificato
-20Hz/5s, zero errori) ma in produzione l'utente riporta "funziona in
-Preview, spesso fermo in Program" (non sempre nemmeno in Preview) per
-wave_kick, e strobo_B non raggiunge mai il 100%. Applicati fix (throttle
-refresh per-scena, bug smoothing condiviso corretto, smoothing velocizzato,
-log diagnostico) MA NON ANCORA TESTATI DAL VIVO. Vedi
-"PUPA_DEVELOPMENT_LOG.md" → "Aggiornamento 6" per i dettagli e il piano di
-verifica per la prossima sessione. Il bug di cache di rendering di base
-("MISTERO RISOLTO") resta valido/confermato — il refresh disable/enable
-funziona in test isolati; il problema aperto e' la sua affidabilita' a
-20Hz sostenuto durante l'uso reale in Program.
+Rewritten 2026-07-17 (previous version dated 2026-07-02, describing a "v0.6" model long since replaced). Update this file when a stable feature lands, an unresolved bug is found, or a concrete future project appears — not every session (see `CLAUDE.md`'s doc-update policy).
 
----
+## What PUPA is
 
-## ⚠️ LEGGERE PRIMA DI TOCCARE brain.py
+A real-time "VJ brain": listens to a live audio feed, extracts bass/mid/high energy and beat/kick/drop/break events, and drives OBS Studio scene switching over the WebSocket v5 API so visuals react to the music without a human at the controls. Runs on two machines against two independent local OBS instances (Windows dev/test, Linux live show rig) that must be kept in scene-collection parity manually — see `OBS_CONFIG.md`.
 
-Questo progetto ha avuto MOLTI cicli di "ho verificato tecnicamente che funziona"
-seguiti da "dal vivo non va bene". Le cause storiche reali (non ipotesi) sono state:
-1. Un metodo OBS chiamato (`set_current_scene_transition_override`) **non esiste**
-   nella libreria `obsws_python` — falliva silenziosamente da SEMPRE, prima di
-   questa sessione. Vedi "Bug Storici Risolti" sotto.
-2. Nomi di transizione inventati (`Flash`, `Strobe`, `Cut`) che non esistono in
-   questo OBS (localizzato in italiano: il Cut si chiama **"Taglio"**).
-3. Un bug di direzione (A→B vs B→A invertiti) causato da leggere `self.in_scene_a`
-   DOPO che era già stato flippato.
-4. Un bug di reset mancante (`temp_b_scene_time` mai azzerato) che rompeva i cicli
-   wave_kick dal secondo in poi.
+## Audio pipeline (`audio_analyzer.py`)
 
-**Prima di dichiarare "risolto" qualcosa**, verificare SEMPRE con un test che
-simula il flusso REALE `decide_next_scene()` → `get_transition_info()` in
-sequenza (non impostando manualmente `in_scene_a` prima di chiamare
-`_get_transition_info()` in isolamento — quello ha mascherato il bug #3 per
-un'intera sessione).
+A `sounddevice.InputStream` callback runs an FFT per audio block and extracts bass/mid/high band magnitudes with AGC-style dynamic normalization (adapts to the input's actual loudness range rather than fixed dB thresholds). From that it derives:
+- **`is_kick`** — bass delta above a threshold, with a cooldown.
+- **`is_drop`** — bass spikes high while its recent history average was low.
+- **`is_break`** — bass low, historical average high, mid still present (silence-with-recent-energy, not just quiet).
+- **`bpm`** — EMA-smoothed estimate from kick-to-kick intervals.
+- **`is_beat` / `beat_count`** — a predicted beat grid (`next_beat_time`, corrected gradually on each real kick, not hard-reset), independent of `is_kick` so a steady pulse survives short gaps. Re-syncs to "beat 1" whenever `is_break` exits — the only reliable resync point, since four-on-the-floor techno gives no way to detect the DJ's true downbeat from the kick pattern alone. `beat_count % BEATS_PER_BAR == 0` is used elsewhere as a "bar boundary" proxy.
 
-**E anche quando i test passano**: chiedere sempre conferma visiva esplicita
-prima di dichiarare fatto. I log confermano che il codice fa quello che dice
-di fare — NON confermano che il risultato visivo sia quello desiderato
-dall'utente. L'ultima sessione (2026-07-02) ha chiuso con l'utente che dice
-"sembra peggiorato" nonostante ogni singolo fix fosse verificato nei log.
+## Decision logic (`brain.py` — `HybridCouplesModel`, module singleton `model`)
 
----
+**Scene organization**: 4 `scene_A` ("body" visuals), a scene_B pool **shared across all of them** (any scene_A can show any scene_B — not a fixed 1:1 pairing), `kick1-4` variants, and 4 "identity" bundles (`{transition, color, wave_kick, waveform}`) that rotate independently of which scene_A is active via a shuffle-bag (guarantees full coverage before any repeat). The 4 fields within one bundle always travel together — never mixed.
 
-## 🚀 Milestone Tracker
+**Couple rotation**: windowed, not a fixed instant — `COUPLE_DURATION_MIN`/`MAX` (150-360s). Past MIN, fires at the next `State.BREAK` (opportunistic, avoids cutting mid-drop); past MAX, fires unconditionally as a safety ceiling. A `META_COUPLE_DURATION_MIN`/`MAX` (900-1500s) window periodically restricts the couple pool to **2 fixed scene_A** (`scenes_config.yaml`'s `meta_pair_duos`: `futureflash_A+kusanagi_A`, `montezuma_A+mri_A` — 2026-07-21, replacing an automatic grouping-by-shared-scene_B that the 07-15 restructuring had silently collapsed to 1-member groups, locking a single scene_A on screen for the entire 15-25min window). Within a duo, alternation is now deterministic (always "the other one" — a 2-item pool needs no randomness or anti-repeat history). At startup, a proper shuffle-bag tour shows all 4 scene_A once each ("in fila") before transitioning to the fixed-duo cycle — count-based (when the tour bag empties), not time-based as before.
 
-### ✅ Milestone 1 — PUPA Core (completo)
-- Connessione OBS WebSocket v5 (obsws-python), lettura/cambio scene
-- Config hardcoded in pupa.py (host/port/password/audio_device)
-- Logging: logger.py → logs/pupa.log, debug_logger.py → debug.log
-- Main loop ~20Hz (time.sleep(0.05) in pupa.py)
+**State machine**: `INTRO / BREAK / RELAX / GROOVE / BUILD / DROP / PEAK`, classified on `bass_avg` (a ~1.4s rolling mean, not the instantaneous FFT block — a single block is almost always near a kick or its tail on dense genres, which would otherwise misclassify almost everything as PEAK/DROP) against **adaptive percentile thresholds**: `PEAK`/`BUILD`/`GROOVE` from the last ~45s of energy history, `BREAK` from a separate, much longer ~4min history (2026-07-22) — a break sustained beyond a chunk of a 45s window used to drag its own threshold down with it (self-referential decay: the longer a break lasted, the more it dominated the very window judging it, "reabsorbing" it into RELAX without the music changing). On a 4min window the same break is a much smaller fraction, so the threshold stays anchored to the genre's real quiet-passage level. A `BREAK_ABSOLUTE_FLOOR` (8) is a non-adaptive safety net under all of this. **`INTRO` is a fixed ~19s grace timer** tied to *scene_A rotation*, not audio — genuinely unrelated to a musical intro until 2026-07-22 added a second, audio-driven trigger: **track-change detection** (`TRACK_CHANGE_*` constants) flags a break lasting >8s followed by BPM re-stabilizing >8 BPM away from its pre-break value once new kicks arrive (checked once, `TRACK_CHANGE_CHECK_DELAY_S` after break-exit, since BPM freezes during a break and needs a few kicks to reconverge) — on a hit, forces the same INTRO grace window, independent of the last scene_A change.
 
-### ✅ Milestone 2 — PUPA Audio (completo)
-- FFT real-time (audio_analyzer.py), bande bass/mid/high, AGC
-- Kick (bass_delta>14, bass>60, cooldown 220ms), Drop, Break detection
+**Scene_A ↔ scene_B cycling**: kick-driven, with a "40/30/30" cycle-position weighting inside a couple's lifetime, a same-scene anti-repeat, and a probability of "SOVRAPPOSIZIONE" (a partial peek toward the other scene, 40-60% blend, held then reverted — not a real switch) instead of a hard cut. A fraction of these overlaps become a real "PAUSA NERA" (100% blend, longer hold) — since 2026-07-17 targeting the current identity's `waveform_*` scene rather than flat `black_master`, so the black-overlay breathing (below) has motion to pulse against instead of nothing.
 
-### 🔄 Milestone 3 — PUPA Brain (v0.6, tecnicamente completo, esito visivo da rivalutare)
+**Bursts**: STROBE (rapid alternation with a random color-flash scene) and CUT BURST (rapid same-scene re-cuts, triggered on an energy pull-back), both beat-locked when BPM is known.
 
-### 📋 Milestone 4/5 — Idee future (rimandate, non ancora implementate)
-- **Sequenze di immagini a tempo di musica**: sorgente `slideshow_v2`
-  ("Presentazione di immagini" in italiano) in `slide_mode: mode_manual`,
-  avanzata da pupa.py sui kick via WebSocket
-  (`TriggerHotkeyByName("SlideShow.NextSlide", contextName=<nome sorgente>)`)
-  invece di un video pre-renderizzato a velocita' fissa (problema con
-  futureflash_A/montezuma_A: il ritmo del taglio non si adatta al tempo
-  reale del brano). Fattibilita' VERIFICATA dal vivo (2026-07-xx): l'hotkey
-  esiste ed avanza la slide correttamente (verificato 2026-07-06). In
-  attesa che l'utente prepari le cartelle di immagini definitive (sfondo
-  nero/trasparente).
-- **Nero anticipatorio pre-drop**: buio un istante prima di un drop, non
-  solo durante gli stati calmi (vedi pausa nera gia' implementata via
-  overlap). Richiede rilevare un drop PRIMA che avvenga (oggi lo rileviamo
-  solo mentre e' in corso) - serve una logica predittiva non ancora presente.
-- **Mix Gruppo1/Gruppo2 tra scene_A**: proposta di dividere le 7 scene_A in
-  due sottogruppi (1: urbanfree/psicodance/kusanagi/segnali/mri, 2:
-  montezuma/futureflash) dove il Gruppo 2 entrerebbe in rotazione con le
-  scene_B nei cicli gia' definiti. Meccanismo esatto non ancora chiarito,
-  da riprendere quando serve.
+**Monitor alternation** (2 physical show outputs — Linux rig, and Windows since 2026-07-22): 4 static Projector windows opened once at startup, alternation = raising the already-open correct one — no window creation/destruction at runtime (an earlier open/close-per-flip design crashed OBS under sustained load, see Known Bugs). Cross-platform since 2026-07-22 via `window_manager.py` (`get_window_manager()` picks the implementation by OS): Linux uses `wmctrl`/`xprop` (X11) exactly as before; Windows uses `pywin32` (`EnumWindows` before/after diffing to find each newly-opened Projector, `SetWindowPos(HWND_TOP)` to raise — not `SetForegroundWindow`, which Windows blocks for a process without real keyboard focus, irrelevant here since these are dedicated fullscreen Projectors). **Requires OBS to run non-elevated** on Windows — if OBS runs as Administrator while `pupa.py` doesn't, Windows' UIPI blocks all window manipulation between them (found live 2026-07-22: even `OpenProcess`/`SetWindowPos` denied, not just `SetForegroundWindow`). 2026-07-17 "Option B" rewrite, replacing an earlier purely-probabilistic re-roll (never guaranteed a visible on/off cycle, only a rare coincidence) with a **deterministic bar-locked phase sequence**: `A → B → (bivio) → A`, where only the bivio right after `B` can roll — with per-state probability and both_on/both_off weights (`MONITOR_SEQUENCE_BARS`/`MONITOR_BREATHER_PROBABILITY`/`MONITOR_BREATHER_CHOICE_WEIGHTS` in `brain.py`) — into a fixed-length "breather" phase before returning to `A`. `DROP`/`PEAK` always bypass straight to `both_on`. Verified via simulation, not yet live-tested under this system.
 
----
+**Overlays** (`color_overlay`, `black_overlay` — shared `color_source_v3` inputs nested in multiple scenes, see `OBS_CONFIG.md` for the mechanism): `color_overlay` pulses to the current identity's color on each kick with a short decay, with a per-couple chance of being off entirely for variety; `black_overlay` runs a slow bar-locked breathing pulse continuously, **plus** a distinct in-out breath synced to the exact duration of an active black-pause (not bar-locked — the pause is often too short for even one bar-locked pulse to read as "breathing"), **plus** an occasional sharper "pre-drop flash" (see below). All three write to the same source; the code sends the max of whichever apply that frame, never sums them.
 
-## 🎯 Architettura Transizioni (v0.6 — stato REALE del codice)
+**Pre-drop flash** (`RUNUP_*` constants, `_detect_runup()`): a genuine predictive trigger, not just reacting to `State.DROP` after the fact — compares the median energy of the last ~1.2s against the ~2.8s before that, as a fraction of the recent 10-90 percentile dynamic range (same adaptive philosophy as the state thresholds), and requires that condition to hold for `RUNUP_PERSISTENCE_S` continuously (not one noisy instant) before firing. Needed real live-data calibration to land here — an initial mean-based, unpersisted version fired 69 times in a few minutes on techno's compressed dynamic range; median + wider windows + persistence fixed it in simulation. Eligibility narrowed 2026-07-22 to `RUNUP_ELIGIBLE_STATES = (BUILD, GROOVE)` — a live test found nearly half its firings landed in INTRO/RELAX/GROOVE, states where "rising tension before a drop" doesn't apply, reading as disconnected from real drops.
 
-### Nomi di transizione REALMENTE registrati in questo OBS
-Verificato via `client.get_scene_transition_list()` (NON fidarsi di nomi assunti):
-```
-Stinger, Fade, Taglio, Scivola, Dissolvenza, Burn, Displace, Luma Wipe, Move, Blur, White Fade
-```
-Scene extra usate per effetti: `strobo_B` (scena bianca per la raffica strobo).
+**Bass signal robustness** (`audio_analyzer.py`, 2026-07-22): the normal `bass`/`bass_avg` is normalized against a fast-release AGC ceiling (`AGC_RELEASE`) that can itself erode toward a sustained quiet passage within a few minutes — once eroded, a genuine break gets divided by an equally-small ceiling and reads back out as a deceptively "normal" percentage (confirmed via simulation: an unchanged near-silent signal climbed from ~4% to ~24% purely from ceiling erosion, no change in the actual music). A second, 10x-slower ceiling (`AGC_RELEASE_LONG`) feeds `bass_avg_long`, which resists this erosion — `brain.py`'s BREAK classification also fires below `BREAK_LONG_FLOOR_PCT` on this signal alone, independent of the (potentially already-eroded) fast-ceiling reading.
 
-### Metodo OBS corretto per applicare le transizioni
-```python
-# obs_controller.py — CORRETTO (dopo il fix):
-self.client.set_current_scene_transition(transition_type)
-self.client.set_current_scene_transition_duration(transition_ms)
-self.client.set_current_program_scene(scene_name)
-```
-Il metodo `set_current_scene_transition_override(...)` **non esiste** in
-obsws_python — se lo vedi da qualche parte, è il bug storico, va rimosso.
-`set_current_scene_transition` è **globale** (non per-scena): impostarlo
-PRIMA di switchare, non dopo.
+**Slideshow** (`slide` scene_B, `slideshow_v2` source): advanced on kick via `TriggerHotkeyByName`, requires `slide_mode: mode_manual` and `playback_behavior: always_play` set explicitly per machine (OBS's own defaults are wrong for this — see `OBS_CONFIG.md`).
 
-### Tre fasi comportamentali distinte
+**CALM MODE / loop-scene**: OBS-hotkey-driven manual overrides (4 discrete energy levels for low-energy genres PUPA can't classify from audio alone; a scene-lock that freezes the couple timer) — read via polled scene-item enabled state, not pushed from PUPA.
 
-**1. INTRO/BREAK — alternanza wave_kick ↔ _A**
-- Nessun ciclo A/B normale in questa fase: solo wave_kick e la scena _A corrente
-- Valutata ad OGNI tick (oltre il debounce), NON solo su kick veri (durante il
-  silenzio i kick richiedono bass>60, raramente si verificano)
-- `prob_wave` (probabilità di entrare in wave_kick) decresce nel tempo:
-  - INTRO: `max(0.2, 1 - couple_elapsed/30)`
-  - BREAK: `max(0.3, 1 - time_in_break/20)`, e il debounce di BREAK stesso si
-    riduce fino al 70% se il crollo del bass è brusco (drop_rate alto) —
-    alternanza Cut/Fade invece di solo Fade
-- **Permanenza minima su wave_kick: 3.0s** (`MIN_WAVE_KICK_DWELL`) prima che un
-  kick possa farlo tornare a _A — applicata SEMPRE che si sia effettivamente
-  su wave_kick, indipendentemente da come lo stato sia cambiato nel frattempo
-- Transizioni: Stinger (esclusivo, solo entrata wave_kick, 20s), Fade (ritorno
-  e ciclo INTRO generico)
+## File map
 
-**2. Recupero post-BREAK (BUILD/GROOVE) — wave_kick esteso**
-- Se usciamo da BREAK con una risalita rapida del bass, wave_kick resta
-  "eligible" anche in BUILD/GROOVE per una finestra di 25s
-  (`POST_BREAK_RECOVERY_WINDOW`), con probabilità proporzionale alla velocità
-  di risalita (soglia 3 unità/s, `POST_BREAK_RISE_RATE_THRESHOLD`)
-- Se il roll di wave_kick fallisce in questa fase, il kick NON viene sprecato:
-  prosegue al ciclo energetico normale sotto (fallthrough)
-- Qui SERVE un vero kick (`is_kick=True`), a differenza di INTRO/BREAK, perché
-  l'energia è già attiva
+- **`pupa.py`** — entry point, ~20Hz main loop: reads audio, calls `brain.decide_next_scene()`, drives `obs_controller`, drives the overlay/slideshow/monitor-alternation side effects that live outside `brain.py`'s scene-decision responsibility.
+- **`brain.py`** — all decision logic described above, `HybridCouplesModel` + module-level convenience functions.
+- **`audio_analyzer.py`** — the audio pipeline described above.
+- **`obs_controller.py`** — thin `obsws_python.ReqClient` wrapper (scene switching, overlay color, transforms, projector management).
+- **`scenes_config.yaml`** — couples/transitions/identity-sets/special-scenes config, actually loaded (see `CLAUDE.md`).
+- **`logger.py` / `debug_logger.py`** — `logs/pupa.log` (decision log, one file per day since 2026-07-17) and `logs/debug.log`/`logs/audio_levels.log` (size-rotated).
+- **`audio_bridge.py`** — Windows-only test-rig helper, bridges CABLE Output to a specific physical output when the native OBS/Windows "Listen" loopback is broken for that device; not part of the live show path.
+- **`runtime_monitor.py`** (2026-07-21) — permanent (not a side script) OBS `GetStats()` polling + PUPA loop-latency tracking, rate-limited alerts with the current audio metrics/brain state/scene attached to every alert line, logged to `logs/runtime_health.log`. Built to finally get frame-level evidence during the monitor-freeze bug (#1 below) instead of only OS-level CPU/GPU snapshots.
+- **`window_manager.py`** (2026-07-22) — cross-platform window raise/detect for monitor alternation (`get_window_manager()` returns `LinuxWindowManager`/`WindowsWindowManager`). Windows path needs the `pywin32` dependency (`requirements.txt`, `sys_platform == 'win32'` marker so Linux installs skip it) and OBS running non-elevated (see above).
 
-**3. Ciclo energetico principale (BUILD/GROOVE/DROP/PEAK/RELAX) — A↔B**
-- **STESSA pool di transizioni per ENTRAMBE le direzioni** (A→B e B→A) — prima
-  c'era un'asimmetria (B→A sempre Fade) che causava "FADE ovunque"
-- Pool per coppia (COUPLE_TRANSITIONS, SENZA Fade — riservato a INTRO/BREAK):
-  ```python
-  COUPLE_TRANSITIONS = {
-      "urbanfree_A":   ["Blur", "Displace"],
-      "psicodance_A":  ["Displace", "Burn"],
-      "montezuma_A":   ["Burn", "Blur"],
-      "kusanagi_A":    ["Burn", "Blur"],
-      "mri_A":         ["Displace", "Blur"],
-      "futureflash_A": ["Burn", "Displace"],
-      "segnali_A":     ["Burn", "Displace"],
-  }
-  ```
-- Ogni switch sceglie random tra: pool della coppia + "Taglio" (Cut), con
-  probabilità di Taglio che cresce con lo stato E col bass live
-  (`CUT_PROBABILITY_BY_STATE`, 0.10 in BUILD → 0.75 in PEAK, +fino a 0.2 extra
-  scalato sul bass corrente)
-- Durata scala con l'energia (crescendo): 900ms in BUILD → 180ms in PEAK, mai
-  sotto 150ms (floor visibile)
-- DROP forza SEMPRE ritorno immediato a _A (priorità massima, NIENTE
-  sovrapposizione qui — deve restare un colpo secco)
+## Current state (2026-07-22)
 
-### Raffica Strobo/Flash ("burst")
-Alterna rapidamente `strobo_B` con la scena di base, 4 flash (8 frame), poi
-atterra sulla scena target normale. **Non bloccante**: piccola macchina a
-stati che avanza un frame per tick di `decide_next_scene()` (niente
-`time.sleep`, il loop a 20Hz continua a girare).
-- Trigger: kick in PEAK (35%) o DROP (15%)
-- Transizione per frame: scelta random tra "Taglio" e "White Fade" ad ogni
-  raffica (per confrontarle)
-- Intervallo tra frame: 100ms
+Live-tested and working: scene restructuring (4 couples + shared B pool + identity system), monitor alternation (stacking architecture, 35+ min stable), beat/bar-locked timers, color/black overlays (kick-pulse, bar-breath, black-pause breath), slideshow, ground-loop-isolated cross-machine audio (peak interference 0.5→0.026), fixed meta-pair duos with deterministic alternation + startup tour. Deployed but not yet live-validated: pre-drop flash (recalibrated twice against live over-triggering, not yet confirmed against a real drop), the Option B monitor phase-sequence rewrite, `runtime_monitor.py`, the long-window BREAK threshold + track-change detection (all simulation-verified, awaiting a real live set to judge).
 
-### Sovrapposizioni ("overlap peek + return")
-Su richiesta esplicita: spinge una transizione verso l'altra scena fino a un
-blend 40-60%, la mantiene lì (non un vero "freeze" — OBS non lo supporta via
-WebSocket; si ottiene con UN fade continuo abbastanza lungo), poi
-**torna indietro alla scena di partenza** (nessun cambio scena netto,
-`in_scene_a` non viene mai toccato).
-- Trigger: 15% di probabilità (25% in INTRO/BREAK) ad ogni switch che sarebbe
-  altrimenti normale — applicata al ciclo A↔B, a wave_kick↔A, MA NON al DROP
-- Hold: 2-4s se il peek va verso _A, 0.5-2s se va verso _B
-- Transizione: random tra "Fade" e "Dissolvenza"
-- Non bloccante: stessa filosofia della raffica strobo
+## Known bugs / open issues
 
----
+1. **OBS CPU/GPU baseline problem recurred 2026-07-17** on the Linux rig (~200% CPU) after being fixed 2026-07-14 (that fix: removing always-on GPU filters). Live-tested 2026-07-21/22 with `runtime_monitor.py`: `radeontop` showed GPU only ~11-13% while OBS sat at 207% CPU — **rules out the Gradient-source/GPU-saturation hypothesis, reconfirms the older diagnosis (CPU-bound H.264 software decode, accepted hardware limit)**. New direct evidence: PUPA's own main loop shows sustained latency (gaps far above the expected ~50ms, essentially continuous over a clean 6min test with minimal external interference) — very likely this same OBS CPU load leaving little headroom for PUPA's single-threaded Python loop on this rig, not a separate bug. Symptom: the 2 physical monitors visually freeze for 10-15s specifically during energetic/pushing music, still not caught in the act by `runtime_monitor.py` (no severe render-skip/fps event coincided with a freeze in the tests so far — only the general elevated baseline). Live A/B-tested with monitor alternation fully disabled — freeze still occurred, **ruling out alternation itself as the cause**.
+2. **"Too choppy" complaint** — `STROBE_BURST_PROBABILITY` halved 2026-07-21 (PEAK 0.35→0.175, DROP 0.15→0.075) after a live test showed STROBE at ~58% of all switch events, same fix pattern as the 07-17 `CUT_BURST_PROBABILITY` halving. CALM-state thresholds still not recalibrated (unblocked since the ground-loop fix, not yet done).
+3. **Slide-scene startup visibility tradeoff** — a `DEBUG_FORCE_B_SCENE` test flag exists (normally `None`) to force a specific scene_B into every rotation for targeted testing; the operator declined making it permanent (would mean the show no longer starts on a random scene_A), so a fresh scene_B is only guaranteed *queued*, not guaranteed shown quickly.
+4. **`SetSceneItemTransform` doesn't render in Program/Projector output** — confirmed still broken on OBS 32.1.2 (see `OBS_CONFIG.md`). Blocks any audio-reactive scale/rotation/position work via that API path.
 
-## 🐛 Bug Storici Risolti (questa sessione, 2026-07-02)
+## Roadmap / next development
 
-### Bug #1 — Metodo OBS inesistente (il più grave, mai notato prima)
-`obs_controller.py` chiamava `self.client.set_current_scene_transition_override(...)`,
-un metodo che **non esiste** in `obsws_python` (verificato con `dir(ReqClient)`).
-Ogni chiamata lanciava `AttributeError`, ingoiata da un `except` silenzioso senza
-log. Risultato: **nessuna transizione custom è mai stata applicata**, da prima
-di questa sessione — OBS usava sempre la transizione globale impostata
-manualmente nell'interfaccia. Motivo per cui "si vedeva sempre solo Fade".
-**Fix:** usare `set_current_scene_transition(name)` +
-`set_current_scene_transition_duration(ms)`, chiamati PRIMA di
-`set_current_program_scene()`. Verificato dal vivo leggendo lo stato reale di
-OBS dopo ogni chiamata (`get_current_scene_transition()`).
+- **Pulse Animator** — replace the broken "Scale to Sound" plugin with a PUPA-native engine (scale/rotation/blur/glow/filters synced to one continuous energy value). Scale/rotation/position/crop ruled out via the `SetSceneItemTransform` bug above; next step is testing whether OBS's native filter API (a different code path, e.g. the "Move Transition"/"Audio Move" plugin) avoids the same limitation.
+- **Dual-monitor independent content** — option C confirmed (small static set of Source Projectors per identity bundle, dedicated to the second physical output) as the first experiment, not yet built.
+- **CALM/state-threshold recalibration** — unblocked since the ground-loop fix, still not started (track-change detection, the other half of this agenda item, is now built — see State machine above).
+- **QLC+/DMX integration** — mentioned as a longer-term stretch goal alongside Pulse Animator; would need OSC/DMX bridging, not an OBS WebSocket extension.
 
-### Bug #2 — Nomi di transizione inventati
-"Flash", "Strobe", "Cut" non esistono in questo OBS (localizzato in italiano).
-Il Cut nativo si chiama **"Taglio"**. Verificato via `get_scene_transition_list()`.
+## Testing philosophy (earned the hard way, still true)
 
-### Bug #3 — Direzione A→B / B→A invertita
-`decide_next_scene()` flippava `self.in_scene_a` PRIMA di ritornare la scena;
-`get_transition_info()` veniva chiamato DOPO da pupa.py e rileggeva
-`self.in_scene_a` già mutato, invertendo sistematicamente la direzione
-rilevata. **Fix:** flag esplicito `self.last_transition_is_return` impostato
-al momento della decisione, non ri-derivato dopo.
-
-### Bug #4 — time.sleep() bloccante per gli "hold"
-Il primo tentativo di implementare "sovrapposizioni" usava `time.sleep()`
-dentro `obs_controller.switch_scene()`, bloccando l'intero loop a 20Hz (audio,
-kick detection, tutto) per la durata dell'hold (8-20 secondi!). **Fix:**
-rimosso completamente; OBS applica la durata della transizione in modo
-nativo e asincrono, non serve alcun blocco lato Python.
-
-### Bug #5 — temp_b_scene_time mai resettato
-Nel nuovo ramo di ritorno da wave_kick, resettavo `self.temp_b_scene` ma non
-`self.temp_b_scene_time`. Il timestamp "vecchio" di un ciclo precedente
-faceva scattare il timeout dei 20s quasi subito al ciclo successivo,
-bypassando la permanenza minima appena introdotta. **Fix:** reset esplicito
-di entrambi al momento del ritorno effettivo (non durante un semplice peek).
-
-### Bug #6 — _update_state usava time.time() invece di current_time
-Bug preesistente (dalla v0.5 originale, non introdotto in questa sessione):
-`state_start_time` veniva impostato con l'orologio reale invece del
-`current_time` simulato/passato dal chiamante. Innocuo in produzione (pupa.py
-passa `time.time()` comunque) ma rende ogni test sintetico fragile e
-imprevedibile. **Fix:** `_update_state` ora accetta e usa `current_time`.
-
----
-
-## ⚠️ STATO APERTO (fine sessione 2026-07-02, ~03:00)
-
-**Tutti i bug sopra sono stati verificati con test realistici E dal vivo sui
-log/debug di OBS.** Ciononostante, l'utente ha valutato il risultato finale
-come **peggiorativo** rispetto a prima ("non proprio bene, sembra
-peggiorato"), senza specificare ancora il dettaglio di COSA esattamente non
-funziona a dovere.
-
-**Prossima sessione deve:**
-1. Chiedere all'utente COSA specificamente sembra peggiore (troppe
-   sovrapposizioni? raffiche strobo fastidiose? wave_kick ora troppo
-   invadente rispetto a prima? crescendo meno percepibile?) — NON assumere e
-   NON ripartire a modificare codice alla cieca.
-2. Considerare che l'aggiunta cumulativa di feature (burst strobo +
-   sovrapposizioni + wave_kick esteso + BREAK reattivo, tutte nella stessa
-   sessione) potrebbe aver reso il sistema visivamente troppo "affollato" o
-   imprevedibile, anche se ogni singolo pezzo funziona correttamente in
-   isolamento — il problema potrebe essere di BILANCIAMENTO/quantità, non di
-   bug.
-3. Valutare se fare un rollback selettivo di una o più feature (es. ridurre
-   drasticamente le probabilità di trigger di burst/overlap) prima di
-   aggiungerne altre.
-
----
-
-## 📦 Architettura Core (invariata)
-
-- **pupa.py** — Main loop (~20Hz)
-- **brain.py** — Decision logic + state machine (v0.6)
-- **obs_controller.py** — OBS WebSocket wrapper (FIXED: metodo corretto)
-- **audio_analyzer.py** — FFT + kick/drop/break detection
-- **logger.py** / **debug_logger.py** — Logging (logs/pupa.log, debug.log)
-
-### Config (Hardcoded, non caricato da YAML)
-- `pupa.py` — OBS credentials, audio device ID
-- `brain.py` — COUPLES, COUPLE_TRANSITIONS, STATE_PARAMS, tutte le costanti
-  di burst/overlap/wave_kick
-
----
-
-## 🎬 OBS Scene Setup
-
-### Couples (1:1 mapping)
-```
-urbanfree_A         ↔ spectrumbar_B
-psicodance_A        ↔ stormlightning_B
-montezuma_A         ↔ roundedbar_B
-kusanagi_A          ↔ radialspike_B
-mri_A               ↔ waveform1_B
-futureflash_A       ↔ waveform2_B
-segnali_A           ↔ ring_B
-```
-
-### Scene speciali (non fanno parte del ciclo couples)
-- `wave_kick` — virtuale (non richiede scena dedicata particolare, gestita
-  via `temp_b_scene` override in brain.py). Rinominata da `waveform_kick` il
-  2026-07-05 per allinearsi al nome scena reale in OBS (vedi
-  PUPA_DEVELOPMENT_LOG.md).
-- `strobo_B`, `strobo_A` — scena bianca/effetto per la raffica strobo
-- `NERO_MASTER` — scena nera (kill-switch, non attivo nel codice corrente)
-
-### Transizioni OBS disponibili (nomi ESATTI, verificati via API)
-`Stinger, Fade, Taglio, Scivola, Dissolvenza, Burn, Displace, Luma Wipe, Move, Blur, White Fade`
-
----
-
-## Testing Commands
-
-```bash
-# Verify syntax
-python -m py_compile brain.py obs_controller.py pupa.py
-
-# Lista transizioni REALI registrate in OBS (non fidarsi di nomi assunti)
-python -X utf8 -c "
-from obsws_python import ReqClient
-c = ReqClient(host='192.168.1.102', port=4455, password='<vedi secrets_local.py>', timeout=5)
-r = c.get_scene_transition_list()
-print([t.get('transitionName') if isinstance(t,dict) else getattr(t,'transitionName',None) for t in r.transitions])
-"
-
-# Verifica metodi REALI disponibili in obsws_python (se in dubbio su un nome)
-python -c "import obsws_python, inspect; print([m for m in dir(obsws_python.ReqClient) if 'transition' in m.lower()])"
-
-# Run + monitor log dal vivo
-python pupa.py
-tail -f logs/pupa.log
-tail -f debug.log
-```
+This project has had repeated "verified it works" → "doesn't work live" cycles. Real historical causes: a method name that doesn't exist in `obsws_python` failing silently; invented transition names not registered in this OBS install; reading a flip flag *after* it had already been flipped; a reset that never fired. **Always test the actual call sequence a real run would make**, not an isolated unit check that can mask ordering bugs. **A log confirming the code did what it says is not the same as the operator confirming the visual result is right** — ask for live confirmation before declaring something done.

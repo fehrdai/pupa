@@ -1,702 +1,190 @@
 # PUPA Development Log
 
-**Purpose:** Track decisions, bugs, and progress to avoid losing context across sessions.
+Technical diary, chronological, terse. For fast context pickup across sessions, not a narrative — see `PUPA_ARCHITECTURE.md` for how things currently work, this file for *when/why* they got that way. Rewritten 2026-07-17 (previous version stopped 2026-07-04; condensed rather than deleted, see "Pre-2026-07-14 history" below). Update at the close of every working session (`CLAUDE.md` policy).
+
+## Version history (condensed)
+
+- **v0.1 "Heartbeat"** — first working loop, fixed-interval scene switching, no audio reactivity.
+- **v0.2/v0.3 "Kill Switch"** — RMS silence detection forcing black on silence. **Dropped** during the v0.4 migration, never re-added.
+- **v0.4 "Disciplined Couples"** — fixed-duration (240s) scene_A/scene_B couples, first version of the couple concept.
+- **v0.5 "State Machine"** — added the INTRO/BREAK/RELAX/GROOVE/BUILD/DROP/PEAK energy classification.
+- **v0.6 "Unified Energy-Reactive"** (2026-07-02) — strobe bursts, overlaps, first (abandoned) scale-to-sound attempt.
+- **Current** — windowed couple/meta-couple timers, beat/bar-locking, decoupled identity system, monitor-alternation as a deterministic phase sequence, audio-reactive overlays, permanent runtime-health monitoring. See `PUPA_ARCHITECTURE.md`.
+
+## Pre-2026-07-14 history — key resolved bugs, still-relevant lessons
+
+- A method name (`set_current_scene_transition_override`) that **doesn't exist** in `obsws_python` was called for a long time, failing silently — no exception surfaced because it was wrapped in a bare `except`. Fixed by setting the transition type via `set_current_scene_transition()` before switching, and always checking `dir(ReqClient)` when unsure a method exists.
+- Invented transition names (`Flash`, `Strobe`, `Cut`) don't exist in this OBS install — verify via `get_scene_transition_list()`, never assume. This OBS's Cut is named `"Taglio"` (Italian locale).
+- A direction bug (A→B vs B→A shown inverted) came from reading `self.in_scene_a` *after* `decide_next_scene()` had already flipped it for the *next* decision.
+- A rendering-cache bug: `SetSceneItemTransform` updates the stored data (confirmed via `GetSceneItemTransform` immediately after) but doesn't force a redraw — a disable→enable toggle right after does force it, for item-level Preview/editor rendering. **This does NOT extend to Program/Projector output** — re-confirmed broken there 2026-07-17, see current entries below.
+- **Standing lesson**: a log confirming code executed as written is not the same as the operator confirming the visual result is correct. Multiple "verified working" claims turned out wrong live. Always get explicit visual confirmation before declaring something done.
 
 ---
 
-## 2026-07-02 (mattina) — Scale-to-sound "fatto in casa" (sostituisce plugin rotto)
-
-**Contesto:** il plugin OBS community `dimtpap/obs-scale-to-sound` era stato
-disattivato perche' incompatibile con OBS aggiornato. Verificato via ricerca:
-non e' un problema nostro, sono issue upstream APERTE e NON RISOLTE
-([#25](https://github.com/dimtpap/obs-scale-to-sound/issues/25) "Cannot get
-plug in to work with 32.0.2", [#27](https://github.com/dimtpap/obs-scale-to-sound/issues/27)
-"please support newer versions", aperta 2026-06-30). Anche l'ultima release
-(1.2.5) risolve solo la compatibilita' con OBS 31.1, non 32.x.
-
-**Decisione:** invece di installare un plugin community alternativo (stesso
-rischio di rompersi al prossimo update OBS — es. `obs-move-to-sound` e'
-esplicitamente "non estensivamente testato"), implementato lo scale-to-sound
-DENTRO pupa.py usando `set_scene_item_transform`, la stessa API WebSocket
-ufficiale gia' in uso per switchare le scene. Verificato dal vivo in
-scrittura su OBS reale (lettura del valore scaleX dopo la scrittura,
-combaciante).
-
-**Implementazione:**
-- `obs_controller.py`: `get_source_item_id()` e `set_source_scale()`
-- `pupa.py`: `SCALE_TO_SOUND_TARGETS` mappa scena→sorgenti, applicato nel
-  loop principale quando la scena corrente e' tra quelle mappate
-- Target scelti dall'utente: `waveform_kick` (Waveform Visualizer 4 + Audio
-  Shader Engine 4), `strobo_B` (Colore)
-- Scale range 1.0x-1.4x sul bass, con smoothing (EMA, peso 0.3) per evitare
-  scatti dovuti al rumore dei blocchi FFT
-
-**Aggiornamento:** l'utente ha fornito la config ESATTA del vecchio plugin
-(Min size 0%, Max size 100%, Audio threshold -25dB, Audio ceiling -17dB).
-Sostituita la logica bass-0-100 con una vera misura RMS in dBFS del segnale
-grezzo (`audio_analyzer.py`: `db_level` in `get_metrics()`), e replicata la
-mappatura soglia/tetto lineare del plugin (`pupa.py`: `_db_to_scale()`).
-
-**Problema di calibrazione trovato e corretto:** i -25dB/-17dB nominali del
-plugin misuravano un'altra sorgente audio OBS (gain diverso); campionando dal
-vivo il device Python i livelli reali erano quasi sempre -30/-62dB, sotto
-soglia — l'effetto sarebbe rimasto invisibile quasi sempre. Ricalibrato su
-**-50dB (soglia) / -28dB (tetto)** in base ai livelli reali osservati (picco
-misurato -30.1dB con audio ambientale, non musica a volume pieno — potrebbe
-servire un ritocco del tetto durante un set reale). Aggiunto `db_level` alla
-stampa console per calibrazione a vista.
-
-**Aggiornamento 2:** l'utente ha segnalato "wave_kick è fermo" — non era un
-problema di calibrazione dB ma di un meccanismo OBS diverso: "Waveform
-Visualizer 4" (in waveform_kick) e "Colore" (in strobo_B) usano
-`boundsType=OBS_BOUNDS_SCALE_INNER` con un riquadro fisso 1920x1080. In
-questa modalita' OBS ricalcola da solo la scala per riempire il riquadro,
-**ignorando scaleX/scaleY** — da qui l'effetto "fermo" nonostante le
-chiamate API andassero a buon fine senza errori. "Audio Shader Engine 4"
-(senza bounds, `OBS_BOUNDS_NONE`) invece rispondeva gia' correttamente a
-scaleX/scaleY.
-
-**Fix:** `set_source_scale()` ora imposta SIA scaleX/scaleY SIA
-boundsWidth/boundsHeight nella stessa chiamata (innocuo per le sorgenti
-senza bounds, efficace per quelle con bounds attivi). All'avvio, `pupa.py`
-cachea boundsType/boundsWidth/boundsHeight base di ogni sorgente mappata
-via `get_source_base_size()`. Verificato dal vivo: boundsWidth passa da
-1920 a 576 (30%) quando si applica scale=0.3, prima restava fisso a 1920
-indipendentemente dal valore richiesto.
-
-**Ripristinati anche i valori dB originali** (-25dB soglia, -17dB tetto),
-su richiesta esplicita dell'utente — la mia ricalibrazione precedente si
-basava su un campione di soli 5 secondi di rumore ambientale, non
-rappresentativo di musica reale a volume di lavoro.
-
-**Nota per il futuro:** se altre sorgenti aggiunte in scene mappate per
-scale-to-sound risultano "ferme", controllare per prime cosa il loro
-`boundsType` via `get_source_base_size()` — e' il sospetto principale.
-
-**Aggiornamento 5 — MISTERO IRRISOLTO, sessione sospesa qui:**
-Dopo i fix di centraggio, ricalibrazione dB (-34/-19), smoothing alzato
-(input EMA 0.3, output EMA 0.7) e sostituzione di "Waveform Visualizer" con
-un'immagine statica isolata ("Immagine 2", per escludere interferenze da
-visualizzatori audio-reattivi propri di OBS), abbiamo fatto un test diagnostico
-pulito e conclusivo:
-
-1. Fermato `pupa.py` (per escludere che il suo loop a 20Hz sovrascrivesse i
-   valori del test prima che si potessero vedere — ipotesi scartata)
-2. Forzato via script isolato scale=1.0 (schermo pieno) <-> scale=0.1
-   (piccolo, 10x piu' piccolo), ogni 2.5 secondi, per 5 cicli
-3. **Verificato lato server DOPO OGNI scrittura** che il valore fosse
-   davvero quello impostato: confermato stabile e corretto ad ogni ciclo
-   (1920x1080 <-> 192x108, mai sovrascritto da nient'altro)
-4. **L'utente NON ha visto ALCUN movimento in anteprima OBS**, nemmeno un po',
-   nonostante un cambio di scala 10x completamente confermato lato server
-
-**Questo esclude:** calibrazione dB, smoothing, interferenza di pupa.py,
-Stinger/transizioni (il test bypassa completamente la logica di
-transizione), sorgente disabilitata/bloccata (verificato `sceneItemEnabled`,
-`sceneItemLocked` — entrambi a posto), scena sbagliata (verificato
-`current_program_scene_name == "waveform_kick"` durante il test).
-
-**Ipotesi NON ancora verificate per la prossima sessione:**
-- **Multi-canvas OBS 32.x**: OBS 32 ha introdotto funzionalita' multi-canvas
-  (verticale/orizzontale). Se la scena visibile all'utente e' su un canvas
-  diverso da quello che stiamo interrogando via `get_video_settings()` /
-  `set_scene_item_transform()`, i comandi modificherebbero uno stato "ombra"
-  mai renderizzato sullo schermo reale. DA VERIFICARE: c'e' piu' di un
-  canvas configurato? Su quale sta guardando l'utente?
-- **Istanza/profilo OBS sbagliato**: l'host e' remoto (192.168.1.102). Possibile
-  che ci siano piu' istanze OBS o profili/scene-collection sulla stessa
-  macchina, e la WebSocket API sia connessa a un'istanza/collezione diversa
-  da quella fisicamente mostrata sullo schermo che l'utente guarda.
-- **"Immagine 2" e' dentro un Group**: se e' un elemento di un gruppo OBS,
-  l'item_id=4 potrebbe riferirsi a un wrapper il cui transform non si
-  propaga visivamente come atteso al contenuto reale renderizzato.
-- **Discrepanza Preview vs Program**: l'utente ha guardato l'ANTEPRIMA
-  (Preview) o il Program reale? Se Studio Mode e' attivo e si guardava la
-  Preview di una scena diversa da quella in Program, il test sarebbe stato
-  inconcludente nonostante tutte le verifiche di cui sopra riguardassero il
-  Program.
-
-**Prossima sessione: NON ripartire a modificare pupa.py/obs_controller.py.**
-Prima isolare DOVE realmente va il comando (chiedere all'utente: quanti
-canvas/profili/istanze OBS ha aperti? Sta guardando Preview o Program?
-Multi-view?), con l'utente presente per confermare in tempo reale cosa vede
-mentre eseguiamo un test come quello sopra.
-
----
-
-## MISTERO RISOLTO (sessione successiva, stesso giorno) — Bug cache di rendering OBS
-
-**Causa reale trovata:** non c'entravano multi-canvas, profili, o istanze
-sbagliate (tutti esclusi con l'utente presente in tempo reale). La causa era
-molto piu' specifica: **`SetSceneItemTransform` via WebSocket aggiorna
-correttamente i dati dell'item (confermato da `get_scene_item_transform`
-subito dopo, sempre corretto) ma NON invalida la cache di rendering di
-quell'item in OBS** — il cambiamento resta invisibile a schermo (sia
-Program che Preview) finche' qualcos'altro non forza OBS a ridisegnarlo.
-
-**Come e' stato isolato (metodo, utile per bug simili in futuro):**
-1. Escluso interferenza di `pupa.py` (fermato, poi testato isolato)
-2. Verificato lato server che il valore scritto fosse davvero quello letto
-   indietro (era sempre corretto — quindi non era un problema di scrittura)
-3. Testato anche un semplice cambio di POSIZIONE (non solo scale/bounds) —
-   ANCHE quello invisibile, il che ha escluso che fosse un problema
-   specifico del ricalcolo dei bounds
-4. Chiesto all'utente di editare MANUALMENTE il pannello Trasformazione in
-   OBS (digitando valori, non trascinando) — quello SI vedeva. Questo ha
-   isolato con certezza: dati, connessione, sorgente, scena — tutto corretto;
-   il problema era specificamente nel path WebSocket -> rendering.
-5. Ipotesi: OBS marca l'item "dirty"/da ridisegnare attraverso un segnale
-   interno che scatta sull'editing UI ma non (o non sempre) sulle richieste
-   WebSocket dirette.
-
-**Fix (verificato dal vivo, incluso stress test a 20Hz per 5s, zero errori,
-nessuno sfarfallio percepito):** dopo ogni `set_scene_item_transform`, un
-rapido toggle `set_scene_item_enabled(False)` -> `set_scene_item_enabled(True)`
-forza OBS a ridisegnare l'item, rivelando il nuovo transform. Nessuna pausa
-necessaria tra le due chiamate. Implementato in `obs_controller.py`,
-`set_source_scale()`.
-
-**Nota per il futuro:** se altre chiamate `set_scene_item_transform` (per
-qualsiasi scopo, non solo scale-to-sound) sembrano "non fare niente"
-nonostante nessun errore e read-back corretto, sospettare per primo questo
-bug — applicare lo stesso workaround (disable/enable toggle) prima di
-cercare altrove.
-
-**Aggiornamento 6:** col fix del refresh applicato in produzione (ogni tick,
-20Hz), l'utente ha riportato un pattern nuovo e specifico: **funziona in
-Preview ma resta spesso fermo in Program** (non sempre nemmeno in Preview).
-Ipotesi: il toggle disable/enable ripetuto 20 volte/secondo sulla stessa
-sorgente potrebbe interferire in modo incoerente col ciclo di rendering di
-OBS quando quella e' la scena IN ONDA (Program ha probabilmente ottimizzazioni
-di composizione/caching diverse da Preview). Fix applicato (da verificare
-dal vivo, non ancora confermato):
-- Throttle del refresh **per scena**: `waveform_kick` (resta a schermo per
-  secondi) aggiorna OBS ogni 3 tick invece di ogni tick (~150ms), riducendo
-  la frequenza del toggle. `strobo_B` (visibile solo ~100ms per raffica)
-  resta ad ogni tick — non puo' permettersi di perdere la sua finestra breve.
-- Bug corretto: `smoothed_scale` era UNA variabile condivisa tra
-  `waveform_kick` e `strobo_B` — passando dall'una all'altra, lo smoothing
-  ripartiva dal valore lasciato dalla scena precedente invece che dal
-  proprio. Ora e' `smoothed_scale_by_scene`, un dict separato per scena.
-- Smoothing velocizzato: output EMA 0.7->0.9, input `db_level` EMA 0.3->0.5
-  (il doppio smoothing sommava troppa latenza per un effetto pensato per
-  essere percussivo/a scatti, non una dissolvenza graduale).
-- Aggiunto log `[SCALE] {scena}: dB=... target=... smoothed=...` in
-  debug.log per correlare nel prossimo test i valori REALI con quello che
-  si vede a schermo, invece di continuare a ipotizzare.
-
-**Non ancora confermato dal vivo se il throttle per-scena risolve
-l'incoerenza Preview/Program.** Se al prossimo test wave_kick resta ancora
-fermo in Program mentre funziona in Preview, l'ipotesi del "toggle troppo
-frequente" va scartata e bisogna cercare altrove (es. differenze di
-composizione/caching specifiche di OBS tra Program e Preview che il
-disable/enable non riesce a forzare in entrambi i contesti).
-
-**Aggiornamento 7 (2026-07-03) — Scale-to-sound DISATTIVATO, piu' tempo a wave_kick:**
-Testato dal vivo con i log diagnostici `[SCALE]`: il calcolo sottostante
-(dB->target->smoothed) mostrava buona escursione dinamica per ENTRAMBE le
-scene (wave_kick 0.00-0.58, strobo_B 0.00-0.83 nella finestra osservata),
-ma **wave_kick restava comunque fermo in Program** (funzionava solo in
-Preview — bug mai risolto nonostante throttle/smoothing/refresh) e
-**strobo_B reagiva ma troppo lentamente**. Decisione dell'utente:
-- strobo_B rimosso dallo scale-to-sound (la scena "fa la sua figura" anche
-  senza scalare)
-- wave_kick rimosso anch'esso per ora; la sorgente "Immagine 2" e' stata
-  sostituita con "Audio Shader Engine" (gia' reattiva di suo)
-- Tutto il codice scale-to-sound (pupa.py: costanti, inizializzazione,
-  applicazione nel loop) **commentato, non cancellato**, per eventuale
-  riattivazione futura. Se si riattiva: aggiornare il nome sorgente
-  ("Audio Shader Engine" non "Immagine 2") e il bug Program/Preview NON
-  risolto resta valido.
-
-**Separatamente, richiesta di dare piu' presenza a wave_kick nei passaggi:**
-- `MIN_WAVE_KICK_DWELL`: 3.0s -> 6.0s (permanenza minima prima del ritorno a _A)
-- Nuovo `OVERLAP_HOLD_WAVE_KICK = (4.0, 7.0)` secondi: quando una
-  sovrapposizione coinvolge wave_kick (in entrata o in ritorno), usa questo
-  hold dedicato piu' lungo invece dei range generici
-  (`OVERLAP_HOLD_B_TO_A`/`OVERLAP_HOLD_A_TO_B`). Verificato con test diretto.
-
-**Non ancora testato dal vivo con musica reale** (solo verificato a livello
-di logica/timing).
-
----
-
-**Aggiornamento 8 (2026-07-03) — Reattivita' generale persa, causa trovata: sovrapposizioni.**
-
-L'utente ha segnalato una perdita generale di reattivita' alla musica.
-Analisi: la SOVRAPPOSIZIONE ha priorita' assoluta (bloccando TUTTI i kick
-successivi finche' l'hold non scade) e scattava con probabilita' 15-25% ad
-OGNI kick, con hold da 0.5-4s (generico) fino a 4-7s (quando coinvolge
-wave_kick, dopo l'aumento della sessione precedente). In DROP/PEAK il
-debounce e' 0.15-0.2s (fino a 5-6 possibili switch/secondo): con quella
-probabilita', un passaggio energico finiva per passare una frazione
-consistente del tempo "congelato" in overlap — da cui la reattivita' persa.
-
-**Fix (non una semplice riduzione percentuale, ma dipendente dallo stato):**
-sovrapposizione **azzerata** durante BUILD/GROOVE/DROP/PEAK (stati in cui
-"la musica spinge"), mantenuta solo in INTRO/BREAK (25%) e RELAX (15%) dove
-resta un accento gradito senza intralciare la reattivita' quando serve di
-piu'. Nuovo metodo `_get_overlap_probability()`, usato in entrambi i punti
-di trigger (ciclo wave_kick e ciclo energetico principale). Verificato:
-0 overlap su 200 kick simulati in stato DROP.
-
-**Non ancora testato dal vivo con musica reale.**
-
----
-
-**Aggiornamento 9 (2026-07-03) — Bilanciamento A/B: troppi passaggi su _B.**
-
-Confermato dal vivo che il fix delle sovrapposizioni ha ripristinato la
-reattivita'. Nuova richiesta: nel ciclo energetico, ogni kick alternava
-sempre A→B→A senza favorire nessuna delle due (50/50 di fatto). L'utente
-vuole piu' presenza per le scene _A.
-
-**Fix:** nuova costante `PROB_ENTER_B_ON_KICK = 0.4` — un kick mentre siamo
-su _A ha solo il 40% di probabilita' di farci REALMENTE passare a _B (il
-60% viene "assorbito", si resta su _A). Il ritorno da _B a _A resta invece
-SEMPRE immediato al kick successivo (non toccato) — asimmetria voluta.
-Verificato con simulazione 2000 tick: tempo su _A passato dal ~50% al 67%,
-_B al 33%.
-
-**Non ancora testato dal vivo con musica reale.**
-
----
-
-**SESSIONE SOSPESA QUI (stesso giorno, pomeriggio) — questi ultimi fix
-(throttle per-scena, stato smoothing separato, smoothing velocizzato, log
-diagnostico) NON sono ancora stati testati dal vivo.** Prossima sessione:
-riavviare pupa.py, suonare musica, e guardare SIA Preview SIA Program per
-wave_kick e strobo_B, correlando con `grep "\[SCALE\]" debug.log` per avere
-i numeri reali (dB/target/smoothed) accanto a quello che si vede a schermo.
-Se il pattern "funziona in Preview, fermo in Program" persiste anche con
-update piu' radi (ogni 150ms), il throttle non era la causa — considerare
-altre ipotesi (es. provare il refresh SENZA throttle ma con un DELAY tra
-disable ed enable invece che back-to-back, o investigare se Program applica
-ottimizzazioni di rendering specifiche non documentate nell'API OBS).
-
----
-
-**Aggiornamento 3 (dopo test con musica reale):** l'utente ha confermato che
-il meccanismo ora si muove, ma con due problemi visivi:
-1. "la vedo muoversi in alto a sx" — quando boundsWidth/boundsHeight si
-   rimpiccioliscono, positionX/positionY restavano fissi a (0,0), quindi il
-   riquadro collassava verso l'angolo top-left del canvas invece di restare
-   centrato. **Fix:** `set_source_scale()` ora ricalcola positionX/positionY
-   per mantenere il CENTRO del riquadro fisso mentre le dimensioni cambiano.
-2. "dovrebbe essere... più reattiva" — misurato dal vivo con musica reale:
-   min=-42.1dB, max=-14.9dB, media=-28.6dB, solo 25% dei campioni sopra la
-   soglia -25dB nominale. Con -25/-17dB la sorgente restava quasi sempre
-   vicino a invisibile. **Ricalibrato a -38dB (soglia) / -18dB (tetto)** sui
-   dati reali misurati, e aumentato lo smoothing (0.3->0.45) per una risposta
-   piu' pronta.
-
-**Aggiornamento 4:** l'utente ha confermato che il centraggio ora e' perfetto,
-ma con musica reale la reattivita' risultava "poca e casuale". Per isolare
-la causa, ha sostituito "Waveform Visualizer 4"+"Audio Shader Engine 4" con
-un'unica immagine statica ("Immagine 2") nella scena waveform_kick, per
-escludere che la reattivita' interna del visualizzatore audio-reattivo di
-OBS si sommasse confusamente al nostro scale-to-sound esterno. Verificato
-con rampa esplicita: il meccanismo di per se' e' pulito. La causa piu'
-probabile della "casualita'" e' che `db_level` veniva calcolato per singolo
-blocco audio (~46ms) SENZA smoothing, a differenza di bass/mid/high che gia'
-usano una media mobile su 30 campioni — audio percussivo puo' far oscillare
-il RMS istantaneo di decine di dB da un blocco al successivo. **Fix:**
-aggiunta media mobile esponenziale (EMA, peso 0.3) su `db_level` in
-`audio_analyzer.py`, verificata su sequenza sintetica rumorosa (42dB di
-escursione grezza -> 14.8dB smoothed, trend preservato).
-
-**Bug di robustezza trovato e corretto durante il fix del centraggio:** la
-"base" (boundsWidth/boundsHeight/posizione a scale=1.0) veniva letta dal
-vivo via `get_source_base_size()` — se pupa.py viene riavviato mentre la
-sorgente e' GIA' rimpicciolita (es. dopo un crash a meta' sessione), quel
-valore "base" sarebbe stato quello corrotto/rimpicciolito, non il vero 100%,
-corrompendo tutti i calcoli successivi. **Fix:** usare la risoluzione del
-canvas OBS (`get_video_settings()`, verificato 1920x1080) come riferimento
-"100%" affidabile invece di una lettura live, assumendo pos=(0,0) — coerente
-con la configurazione osservata di queste sorgenti specifiche (copertura
-intero canvas). Verificato: il centro resta sempre a (960,540) indipendente
-dallo stato di partenza.
-
----
-
-## Development Path: How We Got Here
-
-### v0.1 - Heartbeat Model (OLD)
-- Simple RMS-based silence detection + scene selection
-- Basic anti-repetition with history buffers
-- Killed in favor of state machine approach
-
-### v0.2-0.3 - Kill Switch Era
-- RMS silence detection (kill-switch to black scene)
-- Scene pooling (ambient vs high-energy)
-- State-based scene selection
-- **Decision:** Not advanced enough for musical crescendo
-
-### v0.4 - Disciplined Couples Model (SETUP_v04_COUPLES.md)
-- Introduced: A/B couples (1:1 mapping)
-- Introduced: Fixed couple duration (4min timer)
-- Anti-repetition with couple_history deque(maxlen=5)
-- **Problem:** Transizioni sempre uguali per coppia, no crescendo
-
-### v0.5 - State Machine Model (CURRENT) ✅
-- **When:** Implemented to add musical intelligence
-- **Key Addition:** 7-state machine tied to energy levels
-- **Implementation:**
-  - State-based debounce (faster in DROP/PEAK, slower in INTRO/BREAK)
-  - State determines transition style (DROP/PEAK force "Cut" override)
-  - Bass history tracking for state transitions
-  - RETURN_TRANSITION_FADEOUT scaled per state
-
-**Code Location:** brain.py lines 15-69 (State enum + STATE_PARAMS)
-
----
-
-## 2026-07-01 - Session Current (Transizioni v2 Setup)
-
-### Issues Discovered
-- ❌ **CONTEXT LOSS:** Session PUPA 0 raggiunto limite, transcript inaccessibile
-- ❌ **IMPLEMENTATION ERROR:** COUPLE_TRANSITIONS refactored con singola transizione per coppia
-  - **Cause:** Misunderstanding del requisito di "alternanza randomica"
-  - **Impact:** Perso il design risolutivo di PUPA 0
-
-### Requisiti Confermati (from PUPA 0)
-
-#### 1. Alternanza Randomica Transizioni per Coppia
-```python
-# WRONG (current):
-COUPLE_TRANSITIONS = {"urbanfree_A": {"type": "Blur", ...}}
-
-# CORRECT (target):
-COUPLE_TRANSITIONS = {"urbanfree_A": ["Blur", "Displace"]}
-```
-- Ogni coppia ha ALMENO 2 transizioni disponibili
-- Sceglie randomicamente tra loro ad ogni cambio A→B
-- Distribuzione: 2 Blur, 2 Displace, 2 Burn, 1 Fade (equa)
-
-#### 2. Transizioni B→A al 80% ("Fade 80% + Return")
-- Transizione Fade procede fino all'80% della durata
-- Si ferma e ritorna indietro (fade-in)
-- Tempo di ritorno: random(1, 5) secondi
-- **Nota:** È un effetto creativo, non un bug
-
-#### 3. Crescendo Musicale (INTRO → DROP)
-- Da INTRO/BREAK fino a DROP aumenta intensità e frequenza transizioni
-- Usa Cut (veloce) in DROP/PEAK, non transizioni normali
-- Velocità aumenta progressivamente per ogni stato
-- **Goal:** Effetto di accelerazione musicale
-
-#### 4. Timing _A > _B
-- Scene _A (main body) hanno durata maggiore di scene _B (filler)
-- Rapporto: _A = 8-15s, _B = 2.5-5s
-- Implementare nella logica di decide_next_scene
-
-#### 5. Wave_kick Timing (PRESERVED)
-- Stinger transizione esclusiva
-- 20s durata
-- Non influenzato da crescendo o B→A 80%
-
-### Decisions Made
-- ✅ Creiamo PUPA_ARCHITECTURE.md come documento di riferimento permanente
-- ✅ Creiamo PUPA_DEVELOPMENT_LOG.md per tracciare decisioni
-- ⏳ Prossimo step: Refactor COUPLE_TRANSITIONS → liste randomiche
-
-### Files Created
-- `/PUPA_ARCHITECTURE.md` — Specifica tecnica e milestone tracker
-- `/PUPA_DEVELOPMENT_LOG.md` — Questo file
-
----
-
-## Session PUPA 0 - LOST CONTEXT
-
-⚠️ **This information recovered from fragmented messages and user recall:**
-
-### Resolved
-- ✅ Alternanza randomica transizioni
-- ✅ Fade 80% + Return 1-5s
-- ✅ Crescendo INTRO→DROP
-- ✅ Timing _A > _B
-- ✅ Wave_kick timing preservation
-
-### Not Recovered (From Session Truncation)
-- Exact COUPLE_TRANSITIONS structure with lists
-- Exact timing values for _A/_B
-- Exact implementation of Fade 80% + return logic
-- State-specific transition frequency rules
-
-**Action:** Reconstruct from requirements + user clarification
-
----
-
-## Journey to Current State (Session History)
-
-### Sessions Before PUPA 0
-1. **v0.1-0.3 Development** — Built core loops, audio analysis, basic scene logic
-2. **v0.4 Couples Model** — Introduced A/B couples, 4min timer, anti-repetition
-3. Early **v0.5 State Machine** — Added 7-state machine with energy-based transitions
-
-### Session PUPA 0 (LOST CONTEXT)
-- ✅ Completed: State machine + couples logic working correctly
-- ✅ Implemented: wave_kick as special break crescendo scene
-- ✅ Designed: Transizioni v2 (randomiche + crescendo + B→A 80%)
-- ⚠️ **CONTEXT LOST:** Sessione raggiunto limite, dettagli non recuperabili
-- **What was lost:** Exact implementation of Fade 80%+return, timing values, some specifics
-
-### Current Session (2026-07-01)
-- ✅ Recovered requisiti from user clarification
-- ✅ Created architecture documentation (PUPA_ARCHITECTURE.md)
-- ✅ Created development log (PUPA_DEVELOPMENT_LOG.md)
-- ✅ Confirmed state machine + couples already working
-- ✅ Confirmed wave_kick already implemented
-- ⏳ **NEXT:** Implement Transizioni v2 (4 parts)
-
----
-
-## Implementation Checklist (Transizioni v2 - Next Steps)
-
-### Phase 1: COUPLE_TRANSITIONS Refactor
-- [ ] Change structure from single type to list of types
-- [ ] Implement random.choice() for each A→B transition
-- [ ] Test that randomness works across multiple iterations
-
-### Phase 2: Fade 80% + Return for B→A
-- [ ] Modify _get_transition_info() for return transitions
-- [ ] Implement 80% duration logic
-- [ ] Implement 1-5s random return time
-- [ ] Test fade behavior in OBS
-
-### Phase 3: Crescendo Musicale
-- [ ] Verify State.DROP uses Cut (already done)
-- [ ] Verify State.PEAK uses Cut (already done)
-- [ ] Adjust transition frequency (debounce) for each state
-- [ ] Test crescendo effect sonically
-
-### Phase 4: Timing _A > _B
-- [ ] Implement duration logic in decide_next_scene()
-- [ ] _A scenes: 8-15s
-- [ ] _B scenes: 2.5-5s
-- [ ] Verify in logs
-
-### Phase 5: Full Integration Test
-- [x] Run pupa.py for 15+ seconds
-- [x] Monitor logs for transition types (timing_A>_B signal confirmed)
-- [x] Verify crescendo effect (debounce varies per state)
-- [x] Verify timing ratio _A > _B (log shows timing_A>_B tag)
-
----
-
-## TRANSIZIONI V2 - COMPLETATO! (2026-07-01)
-
-**All 4 Phases Implemented & Tested:**
-1. ✅ **COUPLE_TRANSITIONS randomiche** — 2 transizioni per coppia, random.choice()
-2. ✅ **Crescendo musicale** — Debounce INTRO(1.5s)→DROP(0.15s), transizioni accelerano
-3. ✅ **Fade 80%+Return** — B→A: fade a 80% durata + return random(1-5s)
-4. ✅ **Timing _A > _B** — Logica: A rimane 4s min, B max 2s, kick da B torna subito a A
-
-**Test Coverage:**
-- Unit Tests: 8/8 passed (syntaxValidation, structureCheck, randomSelection, fade80Test, crescendoDebounce, waveKickTest, distributionEquality, integrationCheck)
-- Integration Test: pupa.py 15s runtime successful
-- Log Verification: All signals present (KICK A [timing_A>_B], DROP/PEAK state debounces)
-
----
-
-## Known Issues & Workarounds
-
-### Issue: Configuration Hardcoded
-- **Status:** Design decision (CLAUDE.md)
-- **Workaround:** Edit brain.py directly for COUPLE_TRANSITIONS, pupa.py for OBS config
-- **Future:** Load from YAML (Milestone 5)
-
-### Issue: Session Context Limit
-- **Status:** Unsolved
-- **Workaround:** Save architecture docs + decision logs to disk
-- **Future:** Use separate sessions for different modules?
-
-### Issue: Wave_kick Scene Not in OBS
-- **Status:** By design (temp override via temp_b_scene)
-- **Detail:** waveform_kick è virtuale, gestito da brain.py
-- **Note:** Non creare scena "waveform_kick" in OBS
-
----
-
-## Testing Commands
-
-```bash
-# Verify syntax
-python -m py_compile brain.py
-
-# Test imports and COUPLE_TRANSITIONS
-python -X utf8 << 'EOF'
-from brain import COUPLE_TRANSITIONS, HybridCouplesModel
-model = HybridCouplesModel()
-print(COUPLE_TRANSITIONS)
-EOF
-
-# Run main loop (10s timeout)
-timeout 10 python pupa.py
-
-# Check logs
-tail -f logs/pupa.log
-```
-
----
-
-## References
-
-- **CLAUDE.md** — Project overview & file structure
-- **PUPA_ARCHITECTURE.md** — Technical spec (this session's creation)
-- **brain.py** — Core decision logic
-- **obs_controller.py** — OBS interface
-- **audio_analyzer.py** — FFT + event detection
-
----
-
-## Session Notes
-
-- User prefers Italian/English mixed communication
-- OBS v32.1.2 confirmed connected
-- Audio device 0 (Microsoft Sound Mapper) active
-- Logging to `/logs/pupa.log`
-- No git repository (use file suffixes for versions: *_old.py, *_FIXED.yaml)
-
----
-
-## 2026-07-02 (notte) — Sessione lunga: bug reali trovati + redesign v0.6 → esito visivo negativo
-
-**Riassunto in una frase:** trovati e corretti diversi bug reali e gravi
-(uno dei quali presente da SEMPRE nel progetto), implementate parecchie
-feature nuove su richiesta esplicita, tutto verificato tecnicamente — ma il
-test visivo finale dell'utente è stato negativo. Sessione messa in pausa per
-chiarire il feedback con calma, non per continuare a modificare al buio.
-
-### Bug reali trovati e risolti (in ordine cronologico)
-
-1. **Metodo OBS inesistente** (`set_current_scene_transition_override`) — non
-   fa parte dell'API di `obsws_python`. Chiamato da SEMPRE nel progetto (anche
-   prima di questa sessione), falliva silenziosamente, OBS restava sempre
-   sulla transizione globale manuale. **Questo, non le mie modifiche
-   precedenti, era la causa reale di "si vede sempre solo Fade".**
-   Fix: `set_current_scene_transition()` + `set_current_scene_transition_duration()`.
-2. **Nomi di transizione inventati** ("Flash", "Strobe", "Cut") mai esistiti in
-   questo OBS (localizzato italiano: Cut = "Taglio"). Scoperto interrogando
-   `get_scene_transition_list()` dal vivo.
-3. **Direzione A→B/B→A invertita**: `in_scene_a` veniva letto DOPO essere
-   stato flippato da `decide_next_scene()`, invertendo sistematicamente quale
-   branch (random pool vs fade-lungo) si applicava a quale direzione reale.
-   Spiegava sia "sembra sempre Fade" (su A→B) sia "B→A non si ferma mai"
-   (bug complementare). Fix: flag esplicito `last_transition_is_return`.
-4. **time.sleep() bloccante**: primo tentativo di "hold" B→A usava sleep
-   dentro `switch_scene()`, bloccando il loop 20Hz (audio, kick detection)
-   per 8-20 SECONDI ad ogni transizione. Rimosso, sostituito con durata
-   nativa OBS (non bloccante).
-5. **temp_b_scene_time mai resettato**: dal 2° ciclo wave_kick in poi, un
-   timestamp "avvelenato" faceva scattare il timeout prematuramente,
-   bypassando la permanenza minima di 3s appena introdotta. Fix: reset
-   esplicito al momento del ritorno reale (non durante un peek).
-6. **`_update_state` usava `time.time()` invece di `current_time`** (bug
-   preesistente dalla v0.5 originale, non mio). Innocuo in produzione
-   (coincidono), ma rendeva ogni test sintetico inaffidabile. Fix: passa
-   `current_time` esplicitamente.
-
-### Feature implementate su richiesta esplicita dell'utente
-
-- **v0.6 redesign unificato**: stessa pool di transizioni (Burn/Displace/Blur
-  + Taglio) per ENTRAMBE le direzioni A→B e B→A, invece dell'asimmetria
-  precedente (B→A sempre Fade). Fade rimosso dal ciclo energetico principale,
-  riservato a INTRO/BREAK e ritorno da wave_kick.
-- **Cut/Taglio probabilistico**: probabilità crescente con stato + bass live,
-  mai sotto un floor di durata visibile (150ms).
-- **Raffica strobo/flash**: burst non bloccante di 4 flash (8 frame) verso
-  `strobo_B`, trigger in PEAK (35%) e DROP (15%), scelta random tra Taglio e
-  White Fade.
-- **Sovrapposizioni**: peek verso l'altra scena (blend 40-60%, non un vero
-  freeze — OBS non lo supporta, approssimato con un fade lungo), hold 2-4s
-  (verso _A) o 0.5-2s (verso _B), poi ritorno alla scena di partenza SENZA
-  cambio scena netto. Applicata al ciclo A↔B e a wave_kick↔A, non al DROP.
-- **wave_kick fixes**: eliminato il vincolo di kick vero per farlo scattare in
-  INTRO/BREAK (i kick reali richiedono bass>60, rari in silenzio); permanenza
-  minima 3s prima del ritorno; BREAK reattivo alla velocità del crollo bass
-  (debounce e Cut/Fade scalano col drop_rate); estensione dell'eligibilità di
-  wave_kick a BUILD/GROOVE per 25s dopo un'uscita da BREAK con risalita
-  rapida, con fallthrough al ciclo normale se non scatta.
-
-### Esito finale: NEGATIVO nonostante tutto verificato
-
-Dopo l'ultimo giro di fix (permanenza minima wave_kick), il test live ha
-mostrato ESATTAMENTE il comportamento corretto nei log (gap 8-11s tra entrata
-e ritorno di wave_kick, wave_kick esteso in BUILD/GROOVE come da design, zero
-errori). **L'utente ha comunque giudicato il risultato "peggiorato" rispetto
-a prima**, senza specificare ancora il dettaglio.
-
-**Ipotesi da verificare nella prossima sessione (non ancora confermate):**
-- Troppe feature attivate contemporaneamente nella stessa sessione (burst +
-  overlap + wave_kick esteso + BREAK reattivo) potrebbero sommarsi in un
-  risultato visivamente "affollato"/imprevedibile anche se ogni pezzo preso
-  singolarmente funziona.
-- Le probabilità di trigger (burst 15-35%, overlap 15-25%, wave_kick fino al
-  100% in certi momenti) potrebbero essere troppo alte cumulativamente.
-- Possibile che l'utente si riferisca a un aspetto estetico/di ritmo che i
-  log non possono catturare (es. "sembra troppo caotico" o "troppo lento" a
-  livello di percezione complessiva, non di singola feature).
-
-**Azione per la prossima sessione:** NON ripartire a modificare codice.
-Prima chiedere esplicitamente cosa non va (con esempi/timestamp se possibile),
-poi decidere se è un problema di bilanciamento (ridurre probabilità/frequenza
-di alcune feature) o di design (rimuovere/ripensare una feature specifica).
-
-### File modificati questa sessione
-- `brain.py` — riscritto quasi per intero (v0.5 → v0.6)
-- `obs_controller.py` — fix metodo OBS + rimozione sleep bloccante
-- `pupa.py` — aggiornati i print di stato per i nuovi kick_mode
-- `PUPA_ARCHITECTURE.md` — riscritto per riflettere lo stato reale v0.6
-- `PUPA_DEVELOPMENT_LOG.md` — questa entry
-
----
-
-## 2026-07-03 — Porting Linux + ripristino pool _B con rotazione reale
-
-**Porting Linux:** creati `requirements.txt` e `LINUX_PORTING.md`. Il codice
-Python era gia' portabile (nessun path Windows hardcoded nei file attivi,
-OBS connesso via rete quindi indipendente dall'OS di chi esegue pupa.py).
-Unico punto critico reale: l'audio locale (`sounddevice`/PortAudio) — gli
-ID dei device sono enumerati diversamente tra Windows e Linux, e Linux non
-ha "Stereo Mix" (serve un device "Monitor" di PulseAudio/PipeWire).
-Aggiornato `list_audio_devices.py` per riconoscere anche questi. Documentato
-di escludere `python-3.14.6-amd64.exe` (installer Windows) dal porting.
-
-**Domanda dell'utente su regola _A/_B:** nessuna regola algoritmica — e' un
-abbinamento tematico curato a mano, documentato in `COUPLES_CONFIG.yaml`
-(design v0.4). Scoperta: il design originale aveva un POOL di 3 possibili
-_B per _A, ridotto a un solo _B fisso durante la riscrittura v0.5/v0.6,
-lasciando `tunnelwave_B` e `projectx_B` fuori rotazione.
-
-**Fix:** `COUPLES` ripristinato come pool per coppia (`projectx_B` rimosso
-su richiesta, `tunnelwave_B` recuperato). Rotazione reale implementata:
-ogni transizione A→B (via burst/overlap/switch diretto) sceglie una nuova
-_B dal pool, evitando di ripetere l'ultima **realmente mostrata**
-(`self.last_shown_b_scene`).
-
-**Bug trovato e corretto in corso d'opera:** un primo tentativo rerollava
-ad ogni kick anche se poi assorbito (asimmetria A/B) o se l'overlap non
-scattava, usando come riferimento l'ultimo TENTATIVO invece dell'ultimo
-MOSTRATO — con piu' tentativi scartati di fila poteva ripetere per caso la
-stessa scena. Fix: `last_shown_b_scene` aggiornato solo nei punti di commit
-certo (dentro burst/overlap-se-scatta/switch diretto), mai nei tentativi
-speculativi poi scartati.
-
-Verificato con test corretto (il primo tentativo di verifica aveva un bug
-di test, non di codice — controllava sempre il pool di "urbanfree_A" anche
-dopo un cambio di coppia): 601 transizioni _B su 5 semi diversi, zero
-ripetizioni consecutive.
-
-**Non ancora testato dal vivo con musica reale.**
-
-**Aggiornamento (stessa sessione):** confermato dal vivo che la rotazione
-funziona (3 scene diverse osservate su urbanfree_A), ma l'utente ha trovato
-la varietà eccessiva. Ridotti tutti i pool da 3 a 2 opzioni (montezuma_A e
-futureflash_A, gia' a 2, invariati), scegliendo le rimozioni anche per
-ridurre la sovrapposizione tra coppie diverse (es. urbanfree_A/kusanagi_A
-condividevano 2 scene su 3 prima, ora nessuna sovrapposizione diretta tra
-le due). Risultato: ogni scena _B condivisa da al massimo 2 coppie (prima
-fino a 3).
-
-**Non ancora testato dal vivo con musica reale.**
+## 2026-07-14
+
+- Built beat-tracking in `audio_analyzer.py`: `next_beat_time`/`is_beat`/`beat_count`, phase-corrected gradually on real kicks (not hard-reset), re-synced on `is_break` exit.
+- Windowed the couple/meta-couple rotation timers (MIN/MAX with opportunistic BREAK-triggered firing, hard ceiling fallback) instead of fixed instants — biggest single fix for "choppy" complaints, since a scene_A swap is the most visible cut PUPA makes.
+- Monitor alternation: **rewrote from open/close-per-flip to window-stacking** (4 static Projectors opened once, alternation = `wmctrl -i -a` raise) after the open/close approach crashed OBS under sustained real-show load — `wmctrl -l -G` itself started timing out under GPU/render distress, the self-healing logic kept opening new windows without closing stale ones, ballooned to 40+ windows, OBS's WebSocket queue overloaded and crashed. Stacking fixes the root cause (no window creation/destruction at runtime) rather than making the failure mode more graceful.
+- Found and fixed a genuine GPU/CPU baseline problem on the Linux rig (OBS 150-190% CPU even idle): two always-on GPU filters (native Scale To Sound, 2x Noise Displacement) ran continuously regardless of scene visibility. Replaced with Shadertastic equivalents. `hw_decode: true` tested and **ruled out** — makes frame skipping far worse on this GPU (AMD Radeon HD 7770), despite lower CPU%.
+- Monitor-alternation config variety: bar-locked roll among alternating/both-on/both-off per state, instead of always toggling.
+
+## 2026-07-15
+
+- Scene restructuring: 8 scene_A → 4, each originally with one dedicated scene_B (later made a shared pool, see 07-16). `ago_talk` → `waveform_color` series. Renamed `wave_kick1-4` → `kick1-4`.
+- Decoupled the "identity" (color + kick variant + transition + waveform) from scene_A entirely — 4 bundles rotate independently via shuffle-bag so any scene_A can show any color over time, instead of a fixed 1:1 mapping. Hard constraint: the 4 fields of one bundle always travel together.
+- Fixed an anti-repeat bug (`segnali_A -> segnali_A`, same scene picked twice) from a monitor-window-identification issue, unrelated to the scene logic itself.
+
+## 2026-07-16
+
+- Windows-Linux cross-machine audio test wiring broke (native "Ascolta"/Listen loopback stopped working for one specific physical output after a Windows Update) — built `audio_bridge.py`, a small `sounddevice`-based software bridge, as a permanent replacement for that one output rather than abandoning the whole test methodology.
+- `ALL_B_SCENES`: made the scene_B pool genuinely shared across all scene_A (previously each scene_A only pulled from its own dedicated scene_B) — any scene_A can now show any scene_B.
+- Tuned `WAVE_KICK_ALT_PROBABILITY` (0.3→0.5) and widened `MONITOR_ALTERNATION_INTERVAL_RANGE` ~50% based on live-measured frequency vs. subjective "too rare" complaints.
+- Designed (not yet built) a "Pulse Animator" concept to replace Scale-to-sound entirely, and a dual-monitor independent-content option (static per-identity Source Projectors).
+
+## 2026-07-17
+
+- Added a "slide" scene_B (`slideshow_v2`, images advanced on kick via `TriggerHotkeyByName`) to the shared B pool. Found and fixed two separate bugs before it worked reliably: `playback_behavior: stop_restart` reset the slide index every time the scene left/re-entered Program (fixed to `always_play`); the Linux copy of the scene also had `slide_mode` still at OBS's own `mode_auto` default (`GetInputSettings` omits fields at default, easy to miss when replicating a scene across machines) — set to `mode_manual`.
+- Built `color_overlay`/`black_overlay`: shared `color_source_v3` inputs nested in multiple scenes (one input, `create_scene_item` into each scene — not a naming convention, a literal shared source). `color` field confirmed to be a 32-bit **ABGR** integer, not RGBA. Iterated live from a static 75% tint (too strong) → 20% static → kick-synced pulse with decay, plus a 35%-per-couple chance of being off for variety. `black_overlay` runs a separate bar-locked breathing pulse, composited via `max()` with the color pulse's decay curve, never summed.
+- Moved the black-pause target from flat `black_master` to the current identity's `waveform_*` scene, so the black-overlay breathing pulse has visible motion to play against instead of nothing — then added a genuine in-out breath wave (cosine, N full cycles across the pause's actual duration) since the existing bar-locked pulse fires at most once during a short pause and doesn't read as "breathing."
+- Built a predictive pre-drop flash (`_detect_runup()` in `brain.py`): median-based short-vs-longer energy window comparison against the recent dynamic range, with a persistence requirement. **First version (mean-based, no persistence, narrow windows) false-positived 69 times in a few minutes** on techno's compressed dynamic range — recalibrated with wider windows + median + persistence, verified clean in simulation (flat noise → no fire, sustained ramp → fires), **not yet confirmed live against a real drop**.
+- Spike-tested whether the 2026-07-06 `SetSceneItemTransform` Program/Preview rendering bug still exists on the current OBS version (32.1.2) — **confirmed still broken**, identical symptom, reproduced live by animating a source's scale and watching Program vs. Preview. This rules out audio-reactive scale/rotation/position via that API for the "Pulse Animator" project; opacity/color via `SetInputSettings` (what the overlays above use) is unaffected and remains the viable path.
+- Diagnosed a "2 physical monitors freeze 10-15s" report: not a PUPA/wmctrl logic bug (no errors logged, PUPA's own loop never stalls) — OBS CPU baseline had **recurred** at ~200% (the 2026-07-14 fix didn't hold, or a new cause appeared from the 07-15 restructuring's added `Gradient` sources), and the freeze correlates specifically with energetic/pushing music (more scene-switch rendering load stacking on an already-strained GPU). Not yet root-caused with `radeontop`.
+- Project file/doc restructuring: deleted ~15 dead files (`*_old.py`/`*_old.yaml`, unused `config.yaml`/`COUPLES_CONFIG.yaml`/`scenes.yaml` config files that were never actually wired into the code, empty `backup/`, obsolete migration docs) — now relying on git history instead of manual `_old` suffixes. Moved `debug.log`/`audio_levels.log` into `logs/`. Switched `logger.py`'s `pupa.log` from an unbounded single file (had reached 13.4MB) to daily rotation. Rewrote `CLAUDE.md`/`PUPA_ARCHITECTURE.md`/`OBS_CONFIG.md` (renamed from `SETUP_v04_COUPLES.md`)/`LINUX_PORTING.md`/this file for the current architecture; established the doc-update-frequency policy now in `CLAUDE.md`.
+- Investigated the Linux CPU load while chasing the monitor-freeze bug above: GPU/RAM/desktop compositor all healthy (XFCE, compositing already off) — the real cost is 5 concurrent H.264 **software** decode threads inside OBS itself. Confirmed video *duration* isn't the CPU lever (per-frame cost is what matters, not length) - resolution/bitrate/profile and simultaneous-source count are.
+- Standardized asset files on the Linux rig to a single folder (`/home/farefesta/fare@festa/`), moving 9 in-use files there and suffixing 16 unused ones `_old` in the old `Desktop/Videofare@festa/` location. Along the way found OBS's scene collection **hadn't saved to disk in 3 days** (07-14) - all 07-15/07-17 work existed only in memory - and that the truly active collection's real filename (`tso_backup_before_scene_removal.json`) doesn't match its display name (`tso`) or the stale `tso.json` that also exists. Both documented in `OBS_CONFIG.md` (verify active collection via `get_scene_collection_list()`, force a save by switching collections and back).
+- Final live test of the day (post asset-cleanup): pre-drop flash fired 54 times in ~13min (down from the original 69-in-a-few-minutes, but still frequent for something meant to read as a rare accent - not yet confirmed live whether this is right or still needs another calibration pass). Monitor alternation rolled normally (alternating/both_on/both_off), zero wmctrl failures. OBS CPU held ~220-227%, consistent with the earlier finding, unaffected by the asset reorg (expected - reorg didn't touch decode characteristics). **Operator's closing assessment: Windows feels noticeably more "in tune" than Linux across the board** (not just the monitor-freeze symptom) - Linux carries CPU load from H.264 decode *plus* monitor-alternation overhead (wmctrl calls, 2 extra always-rendered projector windows) that Windows doesn't pay at all (single output, no stacking). Reinforces two already-agendaed items rather than opening new ones: (1) reducing overall cut/transition frequency (lowers render pressure generally, helps Linux more since its margin is already thin), and (2) worth separately asking whether the monitor-alternation interval range itself should widen further specifically to cut wmctrl call frequency, since that cost is Linux-only. Deferred to next session, nothing implemented against this yet.
+- Same evening, hardware upgrade question asked and answered (no budget right now, but useful analysis for later): an HP Z420 (Xeon E5-2650 v2, 8c/16t, 16GB RAM, Quadro K2200) would likely help on two fronts - more cores directly relieves the diagnosed 5-thread-vs-4-core decode contention (and Xorg/wmctrl sluggishness under that contention, which is the actual mechanism behind the monitor freeze - not just a separate issue), and switching from AMD to NVIDIA reopens a realistic path to working hardware decode (NVDEC is generally far better supported in OBS/Linux than this AMD's VAAPI, which was conclusively ruled out 2026-07-14). Would NOT change the monitor-alternation *call frequency* itself, which is a pure software/timing decision independent of hardware.
+- Rebalancing pass implemented same evening (operator: "procedi", snapshot of prior values saved to `TUNING_SNAPSHOT_2026-07-17.md` first): `CUT_BURST_PROBABILITY` halved across all states (BUILD 0.50→0.25, GROOVE 0.40→0.20, DROP/PEAK 0.30→0.15, RELAX 0.20→0.10) - `STROBE_BURST_PROBABILITY` left untouched (already DROP/PEAK-only, not the main choppiness source). `MONITOR_ALTERNATION_INTERVAL_RANGE` widened again (~60-70% further on top of the 07-15 widening) and `MONITOR_CONFIG_WEIGHTS` rebalanced so "alternating" becomes the rare exception (10-20% weight) instead of the dominant choice (was 60-75%) in INTRO/BREAK/RELAX/GROOVE/BUILD, shifting mass to `both_on`/`both_off` - fewer wmctrl calls per minute, which should help both the perceived choppiness and the CPU-contention-driven monitor freeze. **DROP/PEAK explicitly left as always-`both_on`, no new "powerful peak" alternating exception** - operator declined adding that complexity for now. Pre-drop flash recalibrated a second time (54 fires/13min was still too frequent): `RUNUP_SLOPE_FRACTION` 0.5→0.65, `RUNUP_PERSISTENCE_S` 0.4→0.7s, `RUNUP_FLASH_COOLDOWN` 6.0→10.0s. **None of these three changes live-tested yet** - deployed and compiled clean on both machines, next session needs a real listen/watch.
+- Live-tested the rebalancing pass above ("molto meglio" - confirmed less choppy) and found two further monitor-alternation issues, one a real bug and one a design gap:
+  - **Bug found and fixed**: `audio_analyzer.py` zeroes `beat_count` on every BREAK exit (an intentional resync), but `brain.py`'s `monitor_last_flip_bar` was never reset alongside it - after a reset, `current_bar` restarts near 0 while `monitor_last_flip_bar` keeps its old (possibly large) value, making `(current_bar - monitor_last_flip_bar) >= bars_needed` false for potentially minutes until `beat_count` grows back past the stale value. Whatever monitor config was active at that moment (e.g. `both_off` - both physical outputs dark) got stuck for that whole stretch instead of re-resolving normally - matches the operator's report exactly ("resta troppi secondi... la frequenza sembra aumentare dopo n minuti", since later BREAKs compound the effect). Fixed by resetting `monitor_last_flip_bar = 0` at the same break-exit point where `break_exit_time`/`bass_at_break_exit` already get updated.
+  - **Design gap found and fixed**: "non si verifica mai un'alternanza statica" - every roll checkpoint picked a brand-new independent random config, so seeing "alternating" chosen on 2+ *consecutive* checkpoints (needed to actually see a clean "monitor1 on for N bars, then monitor2 on for N bars" cycle) was rare even before tonight's reweighting, and became nearly impossible after cutting alternating's weight to 10-20%. Fixed by making config selection **sticky**: new `MONITOR_CONFIG_DWELL_CYCLES = (3, 6)` - once a config is picked, it holds for a random 3-6 consecutive roll-checkpoints (still bar-locked, same cadence as before) before a new one is drawn; while dwelling in "alternating," the flip still happens every checkpoint (that's what makes it alternate) - only the *type* of configuration changes less often now. Operator's framing: this was always intended to lighten wmctrl-call load too, not just look better - fewer config-type switches means fewer actual `wmctrl -i -a` invocations, not just a cosmetic change. Verified via simulation (forced-alternating run showed a clean False→True→False→True sequence across consecutive checkpoints; a real random run showed `both_on` held for 6 consecutive checkpoints before re-rolling). Deployed, compiled clean on Linux, **not yet live-tested**.
+- Live-verification round for the two fixes above turned into a bigger diagnostic. First live test: "alternating" never got picked once in ~4min (statistically plausible at 10-20% weight combined with the new sticky/dwell mechanism drastically reducing how often a *fresh* pick even happens - not itself a bug) - agreed to re-test with alternating's weight temporarily boosted to actually observe the cycle. Before that could happen, the operator reported a much bigger issue: **both physical monitors going solid black, staying stuck, then resuming just as abruptly, feeling disconnected from the music** - and raised a sharp diagnostic question: is monitor alternation itself destabilizing the rest of the system (transitions, scene_B cycling)? Ran a clean A/B test: temporarily set `MONITOR_SHOW1_INDEX`/`MONITOR_SHOW2_INDEX` to `None` in Linux's `secrets_local.py` (auto-disables the whole feature, no code touched, trivially reversible) and re-tested. **Result: the stuck-black freeze recurred even with monitor alternation completely disabled** - this rules out monitor alternation as the cause of that specific symptom; whatever's freezing the output is upstream of it (OBS's own render/compositor pipeline under load). Confirmed via `logs/pupa.log` during the freeze that PUPA's own decision loop kept running normally (STROBE bursts, KICK A/B switches logged throughout) - the freeze is in OBS's video output specifically, not a PUPA hang. OBS's WebSocket control layer also stayed responsive throughout (used it to force a scene-collection save before restarting OBS, protecting against the same "unsaved for days" risk found earlier today) - only the actual rendered frame was stuck. Operator restarted OBS manually; after restart, the freeze did not recur immediately and transitions/cycling looked "better" but still occasionally "incepparsi" (stutter/hitch). **`secrets_local.py` reverted back to the real monitor indices (1/2) - the None-disable was diagnostic only, not a permanent change.**
+- **Next session's real priority, per the operator: proper continuous resource monitoring during a live test, not single point-in-time snapshots.** A single `top -bn1` isn't enough to correlate a specific stutter moment with a resource spike. Built (not yet run to completion) `/tmp/resource_monitor.sh` on the Linux rig - samples OBS %CPU, `python3` (pupa.py) %CPU, system load average, and a `radeontop` GPU line once per second to `/tmp/resource_monitor.log`, timestamped, meant to run for the duration of a real test so any reported stutter can be looked up against the exact concurrent resource readings instead of guessing from an isolated snapshot. This should be the first thing done next session, before further tuning - we don't yet have a real timeline of resource use to confirm what's actually happening during a freeze/stutter, only single-moment snapshots and inference.
+- Ground-loop isolator installed on the Linux audio path; verified by recording from the `PULSE_SOURCE`-pinned device before/after — peak interference dropped 0.5 → 0.026, resolving the long-standing cross-machine audio noise. `resource_monitor.sh` (bash) rewritten as `resource_monitor.py` (single persistent process) after the bash version kept spawning duplicate instances over SSH backgrounding; extended to also poll OBS `GetStats()` (fps/render&output skipped frames), never collected continuously before.
+- Found and fixed a genuine OBS UI bug, separate from the `SetSceneItemTransform` issue: a whole-scene-collection `preview_locked: true` field (stored in the collection's own JSON, not exposed via `obsws_python`) was blocking ALL drag/resize in the Preview panel regardless of per-source lock state — fix is right-click directly on the Preview panel (not a source) → uncheck "Lock Preview". Documented in `OBS_CONFIG.md`. `white_master` rendering 16:9 instead of fullscreen in Program (correct in Preview) was re-investigated in the same session and reconfirmed as the *other*, already-known `SetSceneItemTransform` Program/Preview desync bug — not a new bug, still unresolved.
+- Live control-genre test (techno) with resource monitoring running: sticky-alternation confirmed working end to end. Operator's post-test feedback (4 points): some transitions/scene_B still read as invisible or reduced to bare flashes; `color_master` strobe flashes felt too frequent (`STROBE_BURST_PROBABILITY` flagged as the likely cause, still not rebalanced); the both-monitors-black freeze still recurs; monitor A/B alternation still felt "all-or-nothing" (raffica o niente) rather than a readable cycle — operator explicitly asked for a programmed macro-sequence instead of re-tuning the existing probabilistic system further.
+- **Monitor alternation rewritten a second time ("Option B"), entirely replacing the sticky-dwell system (`MONITOR_CONFIG_DWELL_CYCLES`)** with a deterministic macro-sequence, per the operator's explicit choice over a smaller fixed-duration tweak to the old system: phases cycle `A → B → (bivio) → A`; only the bivio right after `B` can roll — with per-state probability/weights (`MONITOR_SEQUENCE_BARS`/`MONITOR_BREATHER_PROBABILITY`/`MONITOR_BREATHER_CHOICE_WEIGHTS` in `brain.py`) — into a fixed-length `both_on`/`both_off` "breather" before returning to `A`. `DROP`/`PEAK` still bypass unconditionally to `both_on`. Verified via simulation (clean `A→B→A→B→both_on→A` sequence, both legs visibly alternating). **Not yet live-tested under this system.**
+
+## 2026-07-23
+
+- **Adaptive kick detection built, live-tested, and REVERTED same session** - see full root-cause/fix narrative below, then the live result: worse than the simple fixed threshold it replaced. Live test showed only 1.8% of samples reaching Linux's true 140+ BPM range (vs 25-27% with the fixed threshold=35 from earlier that same evening). Diagnosis: a percentile-based floor is by construction always exceeded by the top 25% of any recent window, kick or not - on this particular track (less separation between "kick" and "everything else" than the clean, simplified simulation assumed), this let through false kicks that corrupted the interval-based BPM median instead of stabilizing it. **Reverted**: `_adaptive_kick_min()` now just returns the fixed `kick_threshold_bass_min` unconditionally (code kept, not deleted, for resuming later with real per-kick classification data instead of guessing again blind). Defaults restored to their known-good values: Windows back to 60 (default), Linux back to 35 (explicit `secrets_local.py` override) - briefly regressed to 15/"safety floor only" mid-session before the revert caught it, fixed before deploy. **Lesson for next attempt**: log which specific samples get classified as kicks (true vs. suspected-false) during a live test, rather than only tracking the downstream BPM effect - the current instrumentation can't distinguish "the floor was wrong" from "a specific set of false positives happened," which is why the fix couldn't be tuned further live.
+- Slideshow transition-speed range tightened per the operator's request: `SLIDESHOW_TRANSITION_SPEED_MS` was 350-900ms (built earlier this session), now 300-600ms (INTRO/BREAK 600, RELAX 550, GROOVE 450, BUILD 400, DROP/PEAK 300) - same relative shape, compressed range.
+- Renamed the artifact "PUPA — Identità scena_A" to "PUPA — Architettura" per the operator's request (content unchanged, still documents the 3-shuffle-bag identity/rotation system specifically - the title change doesn't imply broader scope yet).
+- **Kick detection made adaptive** (`audio_analyzer.py`), closing out the BPM-instability investigation from 2026-07-22. Timeline: raised Linux's `AUDIO_INPUT_GAIN_PCT` (40→70%) first - real signal-level improvement (grezzo bass 1-2→6-8) but did NOT fix BPM instability (still scattered 100-130 vs Windows' stable 140-150). Root cause found: `kick_threshold_bass_min` was a single FIXED value (60) shared across machines, but Linux's bass_norm sits below it ~80% of the time (vs ~55% on Windows) even after the gain fix - real kicks were being missed whenever they didn't cross an absolute floor tuned for a different signal chain. A quick fixed override (Linux: 60→35) gave a real, reproducible improvement (0.7%→~25-27% of samples reaching the true 140+ BPM range, confirmed across 2 separate live tests) but plateaued - further guessing at fixed numbers had diminishing returns. **Same evening, built the adaptive version properly**: `kick_threshold_bass_min` now serves as a low safety floor only (default lowered 60→15, since a high "floor" would just re-dominate and defeat the adaptive mechanism); the real threshold is `_adaptive_kick_min()`, the 75th percentile of a dedicated ~6s rolling window (`bass_history_kick`, `KICK_ADAPTIVE_WINDOW_SAMPLES=130`) - same philosophy as `brain.py`'s adaptive BREAK threshold, self-calibrating to whatever signal dynamics are actually present instead of needing per-machine manual tuning. Verified via simulation: old fixed-60 threshold caught only 8/25 injected kicks on a Linux-like low-baseline signal; the new adaptive version caught 25/25 on the same scenario AND 24/25 on a healthy/Windows-like scenario across 5 random seeds (no regression). Linux's `KICK_THRESHOLD_BASS_MIN` override changed 35→15 to match the new safety-floor role. Deployed to both machines, compiled clean, **not yet live-tested**.
+- Separately, spent real effort on the underlying hardware question ("why does Linux's signal chain behave worse"), at the operator's request: confirmed via a band-specific (bass/mid/high FFT magnitude) recording comparison that the ground-loop isolator does attenuate somewhat (~2-3x) but isn't the primary cause. Tried an on-hand alternative USB audio interface (iCONNEX iKey-Audio, PCM2902 chip) as a replacement for the onboard motherboard codec - confirmed via `amixer`/web research that the PCM2902 chip has no capture/record gain control on ANY OS (a known hardware limitation of that chip family, not fixable in software) and captures line-level input far too quietly for this bridge - not a good fit, reverted to the onboard codec + isolator. Identified two concrete, unstarted hardware upgrade paths for later: a same-socket CPU upgrade (Linux rig's actual hardware turned out to be an Intel Core i5-650, 2010, 2 physical cores/4 threads, on an ASUS V-P7H55E LGA1156 board - confirmed via ASUS's own support page that i7-870/875K/880, quad-core/8-thread, are supported, and the board's current BIOS 0504 already meets the requirement for all three, no firmware update needed) and a dedicated USB audio interface (Behringer UCA202/222 recommended - well-documented Linux class-compliant support, unlike the iConnex).
+- **Linux rig: X11/display hang after a routine reboot, root-caused and fixed.** Both physical monitors went black following a normal restart; SSH stayed reachable throughout (`lightdm`/`Xorg` processes alive) but `who`/`loginctl` showed no real seat0 session, no greeter, no `xfce4-session`. `journalctl -b 0` showed amdgpu initializing cleanly at boot (no GPU crash/reset messages), load average 0.00 (genuinely idle, not thrashing). Root cause narrowed via `/var/log/lightdm/lightdm.log` (sudo): Xorg loads every driver module successfully (amdgpu/ati/modesetting/fbdev/vesa) then hangs forever at "Waiting for ready signal from X server :0" - X never signals lightdm, so no greeter ever spawns. Reproduced identically across a lightdm restart, a video-cable disconnect, and (critically) a full hard power-cycle with only one DVI cable connected - ruling out a bad cable/monitor. A `chvt 7` attempt (hypothesizing the `-novtswitch` X config was blocking DRM-master handoff from kernel fbcon) itself hung indefinitely, pointing to a kernel/DRM-level stall rather than an X11-level one. `dpkg.log` showed `libdrm-amdgpu1`/mesa packages upgraded 2026-06-26, but the currently-running kernel (`7.0.0-28-generic`) was notably newer than that, with an older `6.17.0-40-generic` also installed - hypothesis: a kernel upgrade regressed amdgpu support for this rig's ~14-year-old Radeon HD 7770 "Cape Verde." Used `grub-reboot` to boot `6.17.0-40-generic` once; operator power-cycled, and this time lightdm reached "ready," the greeter appeared, and login succeeded (`xfce4-session` running normally) - **hypothesis confirmed**. Made the fix permanent (not just a one-time `grub-reboot`, which would have reverted to the broken kernel on the next restart): set `GRUB_DEFAULT` in `/etc/default/grub` explicitly to the `6.17.0-40-generic` advanced-options menu entry, `update-grub` to regenerate, verified the new `set default=...` line in `grub.cfg`. Checked all 42 pending `apt` upgrades for anything graphics/kernel-related - none found (only unrelated security/package updates, plus an available `obs-studio` 32.1.2→32.2.0 bump) - **operator explicitly deferred the OBS update** rather than risk touching a freshly-stabilized machine right before further live testing. `linux-generic-hwe-24.04` meta-package (which keeps pulling the newest HWE kernel) was deliberately left un-held - the explicit `GRUB_DEFAULT` pin means future kernel installs won't change what actually boots, without needing to fight `apt` over package holds.
+- **Monitor alignment tooling, prompted by reconnecting cables (DP/HDMI) after the X11-hang saga above.** Once reconnected, `xrandr --listmonitors` showed all 3 Linux outputs (`DVI-I-1`=regia, `HDMI-A-0`=SHOW1, `DisplayPort-0`=SHOW2) at the identical position `+0+0` - cloned/overlapping, not extended. Since `window_manager.py`'s `LinuxWindowManager` identifies Projector windows by X position, this would have silently broken monitor alternation (both outputs indistinguishable) had `pupa.py` been launched as-is. Built `monitor_align.py`: reads `MONITOR_SHOW1_INDEX`/`MONITOR_SHOW2_INDEX` from `secrets_local.py`, cross-checks their positions (preferring OBS's own `get_monitor_list()` when OBS is reachable, falling back to `xrandr --listmonitors` otherwise), and on mismatch prints (or with `--fix`, applies) the `xrandr --right-of` command needed - anchoring the 2 SHOW outputs to the right of any detected third "regia" monitor without touching its position or primary flag (confirmed live: `DVI-I-1` stayed untouched at 0,0, `HDMI-A-0`→1280,0, `DisplayPort-0`→2560,0). Ran with `--fix` this session, verified working. **Added a passive startup guard in `pupa.py`** (same spot that already computes `monitor_show1_x`/`monitor_show2_x` from `get_monitor_list()`): if the two SHOW monitors resolve to the same X position, print a warning pointing at `monitor_align.py` and disable `monitor_feature_available` for that session (same graceful-disable pattern as the existing "index not found"/"window open failed" checks) - deliberately warn-only, no auto-fix from within `pupa.py` itself, since blindly re-running xrandr from inside the main loop risks guessing wrong if the physical setup ever has more than one extra "regia"-like monitor. Compiled clean, deployed both machines.
+- **Live-tested the monitor layout fix, ~17min real music.** Confirmed working end to end: A/B phases alternated 56 vs 55 times (near 1:1 as designed), 5 `both_on`/4 `both_off` breathers correctly interspersed, zero window-activation failures for the whole test - the extended xrandr layout held. Loop-latency alerts (109, same CPU-starvation baseline as always) - nothing new. **New watch-item, non-urgent, on the agenda**: one `both_on` breather (of 5) coincided with a real fps/render-skip dip (24→11.5fps, skip 58→320 over ~1min) during a BREAK/INTRO stretch on `kusanagi_A` - possibly `both_on`'s simultaneous dual-Program rendering adding a real load spike, but only 1/5 occurrences isn't enough to call it systematic. Next live test: correlate `runtime_health.log` fps/skip drops against `[MONITOR-SEQ] fase=both_on` timestamps specifically.
+
+## 2026-07-21
+
+- Built `runtime_monitor.py`: a permanent (not a manually-launched side script) monitor combining OBS `GetStats()` polling (fps, average render time, render/output skipped-frame deltas, OBS's own CPU%) with PUPA's own loop-latency tracking, both alerted (rate-limited, mirrors the existing clip/silence alert pattern already in `audio_analyzer.py`) with the current audio metrics and brain state/scene attached to every alert and periodic line, all logged to `logs/runtime_health.log`. Directly answers the standing question of whether OBS's own render pipeline is losing frames during a freeze, without needing to SSH in and run `resource_monitor.py` by hand. Added `OBSController.get_render_stats()`; wired into `pupa.py`'s main loop (replaces the ad-hoc `[LOOP LATENCY]` log line from 07-17). Compiled clean and deployed to both machines — **not yet live-tested through an actual freeze event.**
+- Published two Artifacts: a refreshed "PUPA — Identità scena_A" (previously described the pre-2026-07-15-restructuring 8-scene/fixed-pairing identity system — rewritten to document the current decoupled shuffle-bag mechanics, three independent rotation "mazzi" at three different cadences) and a new "Alternanza monitor — sequenza macro programmata" diagramming the Option B phase cycle above.
+- Live-tested the Option B system + `runtime_monitor.py` together for the first time. Operator flagged, live, that a scene_A (`futureflash_A`) had been running ~15min unchanged - root cause: `_get_identity_duos()` grouped scene_A by shared scene_B pool, a computation the 2026-07-15 restructuring (unique scene_B per scene_A) had silently collapsed to 1-member groups, locking a single scene_A on screen for the entire 15-25min meta-pair window instead of alternating 2 as originally designed. **Fixed per the operator's exact spec**: `scenes_config.yaml`'s new `meta_pair_duos` (`futureflash_A+kusanagi_A`, `montezuma_A+mri_A`, fixed not derived) + deterministic alternation for a 2-item pool (the old `couple_history` anti-repeat window of 5 was worse than useless there - saturated in 2 picks, fell back to an unfiltered 50/50 that could repeat) + a proper startup shuffle-bag showing all 4 scene_A once "in fila" before transitioning to the fixed-duo cycle, count-based (bag empties) rather than time-based as before (which could cut the initial tour short or run past full coverage). `couple_history`/`deque` import removed as dead weight once nothing read it anymore. All three pieces simulation-verified (clean alternation, clean 4-scene tour, correct handoff) before deploying to both machines.
+- Live-tested again post-fix (~6min, launched normally by the operator this time, not via SSH nohup - controlling for that as a confound): alternation confirmed clean. `STROBE_BURST_PROBABILITY` halved (PEAK 0.35→0.175, DROP 0.15→0.075) after the previous test showed STROBE at ~58% of all switch events - same fix pattern as the 07-17 `CUT_BURST_PROBABILITY` halving. Loop-latency alerts from `runtime_monitor.py` persisted at the same rate even with far less SSH interference this time - checked live: OBS itself was at 207% CPU with `pupa.py` not even running, `radeontop` showed GPU only ~11-13% (rules out the Gradient-source/GPU hypothesis from 07-17, reconfirms CPU-bound H.264 software decode as the real cost) - PUPA's own loop is very likely CPU-starved by OBS's own baseline load on this rig, not a new bug and not (mainly) an SSH-polling artifact.
+- Operator's follow-up questions on "difficulty reading INTRO/BREAK" led to a 3-part fix, all built together per "fai tutte e 3":
+  1. **BREAK threshold decoupled from the 45s window**: `_adaptive_thresholds()` previously computed all 4 state thresholds (peak/build/groove/break) from the same ~45s `energy_history` - fine for peak/build/groove (should track recent dynamics), but break has a self-referential decay problem: a break sustained beyond a chunk of 45s increasingly dominates the very window judging it, dragging its own threshold down and eventually "reabsorbing" into RELAX without the music changing. Fixed with a second, ~4min `energy_history_long` used ONLY for the break threshold (peak/build/groove untouched) - a sustained break is a much smaller fraction of 4min than of 45s, so the threshold stays anchored. Found and fixed a second issue while verifying via simulation: the existing "minimum gap between thresholds" clamp (`break_th = min(break_th, groove - 3)`) re-coupled break_th to the still-decaying short-window groove value, defeating the whole fix - removed that specific clamp (peak/build/groove keep their own staircase clamp, break_th doesn't need one anymore since it's independently sourced). Verified: a realistic noisy 40s break now classifies as BREAK 96% of the time throughout its duration (vs. decaying toward RELAX before).
+  2. **`BREAK_ABSOLUTE_FLOOR = 8`**: a non-adaptive safety net under all of the above - genuine near-silence is always BREAK regardless of percentiles.
+  3. **Track-change detection, built for the first time** (`TRACK_CHANGE_*` constants): reuses existing signals (BPM, break duration) instead of new spectral analysis - a break lasting ≥8s followed by BPM re-stabilizing ≥8 BPM away from its pre-break value (checked once, 8s after break-exit, since BPM freezes during a break with no kicks and needs a few real kicks post-break to reconverge) flags a probable track change and forces the same INTRO grace window (`_intro_window()`, reused not reinvented) independent of the last scene_A rotation. Answers the standing gap: PUPA's `INTRO` state was previously a pure scene-rotation timer, never actually tied to the music - this gives it a second, audio-driven trigger. Verified end-to-end via a synthetic `decide_next_scene()` timeline (groove → 10s break → BPM shift on exit → INTRO forced ~8s later, as designed). All three deployed to both machines, **none live-tested yet against a real set**.
+- Live-tested all three of the above for the first time (~14min, tech house). Operator's verdict: generally much better, but two remaining gaps - "non riconosciamo quando il basso o la batteria smette" and "la pausa pre-drop/peak non viene." Log analysis found concrete causes for both, fixed same session:
+  1. **AGC ceiling erosion masks a sustained break** - found by reading `audio_levels.log`'s raw `tetto_agc`/`grezzo` columns (not just the normalized bass%): the fast AGC ceiling (`AGC_RELEASE=0.9995`) had eroded from ~86 down to ~2-4 over the course of the test, meaning a genuinely dead-quiet passage got divided by an equally-tiny ceiling and read back out as a "normal-looking" percentage - the break didn't vanish from the numbers, it lost the contrast that would make it recognizable. Confirmed via simulation: after a 4min break, `bass_norm` (fast ceiling) climbs back up to 24.5% with the raw signal completely unchanged, purely because the ceiling eroded to match it. **Fixed**: a second, 10x-slower-release ceiling (`AGC_RELEASE_LONG=0.99995`, `audio_analyzer.py`) feeding a new `bass_avg_long` metric that resists this erosion (stayed at 2.6-3.5% throughout the same simulated break) - `brain.py`'s BREAK classification now also fires below `BREAK_LONG_FLOOR_PCT=15` on this signal, independent of whatever the fast-ceiling-normalized `bass_avg` says.
+  2. **Pre-drop flash firing in musically nonsensical states** - of 15 flashes in the same 14min test, only 8 were during BUILD (where a "rising tension before a drop" makes sense); 7 fired during INTRO/RELAX/GROOVE, likely why it "doesn't feel connected to real drops." **Fixed**: `_detect_runup()`'s eligibility narrowed from "any state except DROP/PEAK" to an explicit `RUNUP_ELIGIBLE_STATES = (State.BUILD, State.GROOVE)` allowlist.
+  - Both deployed to both machines, compiled clean.
+- **Slideshow advancement moved from per-kick to beat-locked**, with cadence and transition duration scaling with energy (same philosophy as cut-burst/monitor alternation, not a new principle): `SLIDESHOW_ADVANCE_BEATS` (1 bar in INTRO/BREAK/RELAX, half-bar in GROOVE/BUILD, every beat in DROP/PEAK) + `SLIDESHOW_TRANSITION_SPEED_MS` (900ms calm down to 350ms energetic) pushed to `slideshow_v2`'s real `transition_speed` field (confirmed live via `get_input_settings` round-trip - not guessed) whenever it changes. Was advancing on every single kick before - fine at moderate BPM but a near-constant slide-flicker on dense tracks, disconnected from bar structure.
+- Live-tested both same-session (~23min, tech house). **Runup-eligibility fix confirmed clean**: all 9 pre-drop flashes fired in BUILD (4) or GROOVE (5), zero in INTRO/RELAX - exactly as designed. **Break-detection fix: promising but not operator-confirmed** - logs show an ~8min stretch (15:15-15:23) with repeated `BREAK -> wave_kick` switches at up to 100% probability, reading as a genuine sustained break correctly held (not "fading" back to RELAX mid-way, the original complaint) - but the operator wasn't watching live during that window, so this is a log-only read, not a confirmed live judgment. Track-change detection did not fire this test - inconclusive (either no real track change happened in this window, or one did and was missed; not distinguishable from logs alone). Session closed here - **next session should start by getting the operator's live impression of the break-reading window specifically**, before further tuning.
+- **Ground loop isolator installed, RESOLVED the long-standing Windows→Linux test-cable interference.** Re-measured with the exact same method used to originally diagnose it (`sd.rec` on the `PULSE_SOURCE`-pinned pulse device, 5s sample): peak dropped from ~0.5 to **0.026**, RMS from ~0.08 to **0.0073** - a ~20x reduction, now close to `SILENCE_PEAK_THRESHOLD` (0.01) instead of ~50x over it. This unblocks low-energy/silence-state testing (INTRO/BREAK/RELAX/black-pause) via this cable, previously flagged unreliable - and unblocks the CALM-mode/state-threshold recalibration and track-change-detection work that had been explicitly deferred until clean audio was available (see [[project_beat_tracking_and_timer_tuning]]).
+- **Monitor alternation ported to Windows** (previously Linux-only). New `window_manager.py` abstracts the platform-specific window raise/detect mechanism behind `get_window_manager()` - Linux keeps its exact, already-proven `wmctrl`/`xprop` logic (moved, not rewritten); Windows uses `pywin32` (`EnumWindows` before/after diffing to find each newly-opened Projector - simpler than Linux's position-based matching, since a single full-window diff around each individual `open_program_projector`/`open_scene_projector` call already unambiguously isolates the new window regardless of which physical output it belongs to; `SetWindowPos(HWND_TOP, ..., SWP_NOACTIVATE)` to raise, not `SetForegroundWindow` which Windows blocks for any background process lacking real keyboard focus - irrelevant here, these are dedicated fullscreen Projectors, only Z-order matters). Hit a real blocker mid-build: OBS on this Windows machine runs elevated (Administrator) - turned out to be a leftover from capturing a now-discontinued app ("ProjectX", suspended, its OBS scene deleted) - Windows' UIPI denied *all* window manipulation from `pupa.py` (non-elevated) toward OBS's windows, not just `SetForegroundWindow`, confirmed via a direct `OpenProcess`/token-elevation check. **Fixed by removing "Run as Administrator" from OBS** (no longer needed) rather than elevating `pupa.py` too - operator's call after weighing the tradeoffs (file-permission mismatches across elevated/non-elevated runs, broader blast radius, UAC friction) against just fixing the actual root cause. Live-tested end to end on Windows after un-elevating OBS: all 4 stacked Projector windows open correctly (`monitorIndex` 0/1, confirmed via `get_monitor_list()` - "BenQ LCD (1)/(2)"), no errors. Linux re-verified unaffected by the refactor (identical `[PUPA] Alternanza monitor: attiva...` output through the new abstraction). Added `MONITOR_SHOW1_INDEX`/`SHOW2_INDEX`/`BLACK_SCENE` to Windows' `secrets_local.py`, `pywin32` to `requirements.txt` (`sys_platform == 'win32'` marker, Linux installs skip it). Deployed to both machines, compiled clean.
+
+## 2026-07-24
+
+- **Windows-only live test (~13min, dub techno)** - operator's explicit choice: Linux testing paused until 2 new audio hardware pieces arrive (Behringer UCA222 + DI400P), so this session's combined-objective test ran on Windows only. Cleaned up 3 accidentally-duplicated `pupa.py` instances from a background-launch mistake before the real single-instance run. Results against the standing agenda:
+  - **Anti-repeat scene_A couple (meta-pair) fix CONFIRMED LIVE**: `futureflash_A`<->`kusanagi_A` (duo 1) alternated cleanly, then rotated into `mri_A`<->`montezuma_A` (duo 2), also alternating cleanly - no repeats within or across the switch.
+  - **Break detection CONFIRMED LIVE, twice**: operator watched 2 real breaks during the test in real time, both read as correct - first genuine live confirmation (previously only inferred from logs).
+  - **`runtime_monitor.py`**: no sustained freeze this test either, but confirms Windows' much healthier baseline vs. Linux - avg fps 28.7/30 target, only 13 LOOP + 9 OBS alerts in ~13min (Linux's comparable window had 109+ LOOP alerts), brief single-sample dips to ~2-4fps during transition bursts that recovered immediately (not a freeze).
+  - **Track-change**: still hasn't fired, but operator reported one break came "quasi" (close) to triggering it - exposed a real instrumentation gap, see fix below.
+- **Two fixes built from the live feedback above, both in `brain.py`:**
+  1. Break-detection watching surfaced a side-observation: cuts ("Taglio") feel dominant during BREAK. Root cause: BREAK's transition choice (`brain.py` ~line 1543) only ever picked between Taglio and Fade, weighted by how sudden the bass drop is (cut probability capped at 0.8) - no softer third option existed. **Fixed**: added `Blur` (already a verified transition name used elsewhere in `COUPLE_TRANSITIONS`, the lowest-intensity of that pool) as a coin-flip alternative to Fade whenever not cutting - BREAK now has 3 effective transition types, not 2. Not yet live-tested with the fix in.
+  2. Track-change's "quasi" report exposed that the code only ever logged the positive-fire branch (`[TRACK-CHANGE] rilevato`) - a near-miss left no trace of how close it was (bpm_delta? cooldown still active?). **Fixed**: added a matching `[TRACK-CHANGE] non rilevato` debug_log line to the else-branch, logging bpm_delta/threshold/cooldown_ok - the next near-miss will be fully diagnosable.
+  - Compiled clean on Windows. Linux deploy attempted but the machine was unreachable (SSH connection timed out) - consistent with it being powered off while paused for the hardware upgrade; sync pending whenever it's back online.
+- **QLC+ / DMX hardware test on Windows** (agenda item promoted from the Linux rig, operator's choice to try it here instead first). QLC+ turned out to already be installed (per-user, missed by an initial system-wide check). The USB/DMX decoder is an FTDI FT232R - Windows already had the VCP driver working (COM3), no missing-driver issue despite the operator's initial suspicion. Patched Universe 1's output to the FT232R device in QLC+'s Ingressi/Uscite, confirmed via Vista DMX. Two daisy-chained generic RGBW PARs: only 1 of 2 responded at first - root cause was assuming 4 DMX channels per fixture when they're actually 7-channel, causing an address overlap (fixture 2 patched at address 5 instead of 8). QLC+'s `Generic Dimmer` fixture type doesn't allow editing channel count after creation (disabled by design) - had to delete and recreate both fixtures at 7 channels, addresses 1 and 8. Operator supplied the fixture's actual manual: Ch1=Master dimming, Ch2/3/4=R/G/B, Ch5=Strobe (0-7 off, 8-255=speed), Ch6=mode select (0-10=direct RGB mode, 11+=various macro modes), Ch7=sub-parameter for whichever mode Ch6 selects - explained all the "weird"/flickering symptoms as expected behavior once both fixtures' Ch6 is set the same way. Hit one unexplained glitch mid-test: Universe 1's FT232R output patch spontaneously disappeared (lights went dark, no device shown patched in Ingressi/Uscite) - operator noticed and re-patched it; cause unknown (QLC+ bug, USB blip, or a bumped cable) - worth capturing logs if it recurs. End state: both fixtures confirmed working, solid white light, full manual control via Vista DMX sliders. Not yet wired for PUPA to control QLC+ (would need an OSC/MIDI input configured - deliberately out of scope for this test, which was just "does the physical chain work").
+- **Process note**: mid-session, spent a long stretch driving QLC+ via computer-use (screen clicks) without asking first, burning tool calls on trial-and-error before the operator flagged it ("cosa stai facendo... spendendo tutti i miei token?"). Corrected to guiding verbally (operator does the clicking, screenshots on request) for the rest of the QLC+ work - much more effective. **Lesson for future sessions: ask before taking over mouse/keyboard control of a GUI app, even when it seems like the fastest path.**
+- **PUPA -> QLC+ sync built and confirmed working end-to-end, same session.** New `qlc_controller.py` (stdlib only, `socket`+`json`) - a persistent TCP client for QLC+'s **OS2L** plugin (port 9996), sending `{"evt":"cmd","id":"<channel>","param":<0-255>}` to set a channel directly. Real path here had several dead ends worth remembering:
+  - Tried **OSC** first - discovered QLC+ requires building a separate Input Profile (via a dedicated Profile Editor tool) to bind ANY raw OSC/MIDI address to a Virtual Console widget; there's no direct "type an address, done" binding.
+  - Switched to **OS2L** on the initial (wrong) assumption that it skips this entirely - corrected via the actual OS2L docs (fetched from the `qlcplus-docs` GitHub repo via `gh api`, after `docs.qlcplus.org` and the forum both blocked WebFetch with Cloudflare 403s): custom (non-VirtualDJ) clients need mapping too, for `btn` (CRC-hash of the name, needs the auto-detect wizard) and `beat` (fixed at channel 8342) - **except `cmd`**, whose `id` is chosen directly by the sender, needing no auto-detect at all. Used `cmd` for exactly this reason.
+  - Bound the external input via QLC+'s "Manual selection" dialog (Universe 1, Channel 1) - but on the wrong widget at first (an empty button with no Scene attached, vs. the auto-created Scene widget that actually worked when clicked manually in QLC+ - the two looked similar in the console layout).
+  - Even correctly configured, nothing worked until root-caused by launching `qlcplus-qml.exe -d "<project path>"` from a terminal to capture real stderr: found that an earlier kill+relaunch had opened a **blank QLC+ session** (no project path argument = empty workspace, not the last-used project) - all the "already configured" state from prior turns wasn't real. Relaunching with the actual `pupa.qxw` path showed `[OS2L] listening on TCP port 9996`, and a `cmd` test showed `Function start()` in the log and lit the fixture - confirmed working end to end.
+  - **`id` must be a JSON number, not a string** - despite the docs' prose showing `"id": "1"` (quoted), sending it as a JSON string made QLC+ log `"Got CMD message 0"` for every single message regardless of content (`QJsonValue::toInt()` returns 0 for a String-typed value in Qt). Fixed in `qlc_controller.py` (`int(channel_id)`).
+  - **UI "Channel N" (Manual Selection dialog) = OS2L `id` value `N-1`** - confirmed by sending 4 distinct test values and checking a screenshot (`id=0` lit the widget bound to "Channel 1", not "Channel 0"). Undocumented anywhere found. Built the final rig with this offset in mind.
+  - **Final rig**: 4 Virtual Console Sliders (Level mode) - Red (fixture Ch2, OS2L id 0), Green (Ch3, id 1), Blu (Ch4, id 2), Strobo (Ch5, id 3) - all confirmed working. Fixture Ch1 (Master)/Ch6 (mode) set once via Vista DMX and left fixed at 255/0, not wired to OS2L.
+- **Design vision from the operator, and same-session build**: lights/video complementary, colored flash synced to `color_overlay`, strobe synced to `_trigger_strobe`. Built and live-tested:
+  - **Color sync CONFIRMED LIVE**: `pupa.py` mirrors `color_overlay`'s RGB+decay onto QLC+ ids 0(R)/1(G)/2(B) at the same call sites (kick trigger, decay frames, off-fade) - operator watched the physical fixtures pulse red/magenta in sync with kicks, matching `red_master` (255,0,127) exactly.
+  - **Bug found+fixed**: when a couple's color-pulse rolls "off" (`COLOR_OVERLAY_OFF_PROBABILITY`), only OBS's overlay was zeroed, not QLC+'s channels - looked like a stuck residual color. Added matching `qlc.set_channel(...,0)` calls to the off-branch.
+  - **Strobe sync built, NOT frame-accurate**: new `brain.is_strobe_burst_active()` drives QLC+ id 3 (150/0) on burst start/end, but the fixture's Strobe channel is an autonomous onboard flasher (sets an internal auto-flash speed, doesn't take literal per-frame on/off) - strobes at its own rate, not the actual beat. Also found live: if R/G/B/Master are all 0 when a burst fires (no color pulse active at that instant), the strobe is completely invisible - nothing to modulate. **Next session**: drive Master/Ch1 directly per burst frame instead (needs a new mapped id + exposing `_advance_burst`'s frame state) - Strobe needs to be designed together with Master/color, not as an independent channel.
+  - **Color accuracy note**: identity switched correctly to `yellow_master`, but the physical fixture read as green, not yellow - likely LED color-mixing doesn't match the screen-tuned RGB (200,160,0); yellow was already flagged weak even on the OBS overlay (hence its own peak-pct override). Needs a separate, physically-tuned RGB mapping for the fixture, tested live by eye - not guessed blind.
+
+## 2026-07-?? (session continued after a real gap - operator: "non ci vediamo da venerdi")
+
+- **Foundational architecture change: PUPA reads OBS's naming convention instead of having scene names hardcoded anywhere.** Operator's own framing: PUPA should be a generic music-reactive engine that any operator can point at a *different* show's OBS content (different DJ/genre/videos) with zero code edits - OBS owns the content, PUPA just needs a naming convention. Planned via `EnterPlanMode` (saved to `C:\Users\Io\.claude\plans\wiggly-moseying-blum.md`), implemented same session, phased explicitly as "scenes first, transitions later" (transitions = future Phase B, not built now). Explicitly out of scope: `meta_pair_duos` (operator called it a rough, possibly-discardable DJ-changeover experiment) and "how intense does transition X feel" (deferred to a future live-tuning hotkey/UI, same vein as the existing `_calm()` mechanism).
+- **Final naming convention** (operator's exact spec): `_A` (primary scene), `_B` (secondary, shared pool across all `_A`), `_kick` (kick-reactive variant), `_color` (identity/color scene - replaces the old `_master` suffix), `_wave` (waveform/spectrum scene - replaces the old `waveform_` prefix). `black_color` is the one mandatory exception within `_color` - if missing, PUPA warns loudly and every colored flash/white strobe falls back to plain black instead of silently breaking. **Slides are NOT a naming category** - a scene (any `_A` or `_B`) is treated as slide-behaved if it contains a nested source of OBS input kind `slideshow` (checked via `unversionedInputKind` for version-independence - confirmed empirically this install actually registers `slideshow_v2`, not bare `slideshow`), regardless of what the scene itself is named - operator's explicit design: slides are meant to be interchangeable with video content, distinguished by what they contain, not a special name.
+- **New `scene_discovery.py`**: pure functions (no OBS API calls inside, just regex/set logic on data passed in) for `_A`/`_B`/`_kick`/`_color`/`_wave` discovery (all `re.fullmatch`-anchored - `backup_A_old` deliberately does not match `_A`), slide detection, and finding a `_color` scene's own (non-shared) `color_source_v3` item, excluding structural/shared ones (`color_overlay`, `black_overlay`, `PUPA_CALM_0-3`, `PUPA_LOOP_SCENE`).
+- **New `obs_controller.py` methods**: `get_all_inputs()` (wraps `GetInputList`, no kind filter - needed `unversionedInputKind` per-item), `get_scene_item_source_names()`, `get_scene_color()` (reads an ABGR int and unpacks it - inverse of the existing `set_overlay_color()` pack logic). **Verified live against the real OBS instance before writing any decision logic** (same "verify, don't invent" principle as the rest of this project): confirmed `get_input_settings()`'s real response shape, and that the unpacked RGB values for never-retuned colors (yellow, green) reproduce **exactly** the "original pre-tuning" values already documented in old comments (yellow: 255,255,127; green: 0,170,0) - strong evidence the unpack math and the whole live-read path are correct.
+- **New `brain.discover_and_merge_config()`**: fills in *missing* `scenes_config.yaml` sections (`couples`, `strobe_color_pool`, `identity_sets`) from live discovery, writes the merged result back to disk, and reloads the module's globals from the freshly-written file - "config wins if already present, else discover." `couples` defaults to every `_A` paired with the *entire* discovered `_B` pool (same philosophy as the existing `ALL_B_SCENES`). `identity_sets` is built only from colors that have a matching `_wave` companion by shared base name (e.g. `red_color`+`red_wave`) - **this was a real bug caught and fixed same session**: an earlier version included every non-black color (so `white_color`, which has no `white_wave`, wrongly got treated as a full rotating "identity" with its own kick assignment) - fixed by requiring the `_wave` match as the actual signal that a color is a full identity vs. a utility/accent color, rather than trying to hardcode an exclusion list (which would have reintroduced exactly the hardcoded-name problem this refactor exists to remove).
+- **Renamed every remaining literal `_master`/`waveform_*` reference across the codebase** to match the operator's actual rename in OBS (done in parallel while the code was being written): `_DEFAULT_SPECIAL_SCENES`/`_DEFAULT_STROBE_COLOR_POOL`/`_DEFAULT_IDENTITY_SETS` in `brain.py`, the `STROBE_SCENE`/`BLACK_PAUSE_SCENE` literal fallback strings, **`STROBE_COLOR_WEIGHTS`** (a per-state creative weighting dict that would have silently stopped working post-rename - not a crash, just quietly degraded to uniform-random color choice, since `_pick_strobe_color()` already gracefully filters unknown names against `STROBE_COLOR_POOL` rather than erroring), `IDENTITY_OVERLAY_RGB`/`COLOR_OVERLAY_PEAK_PCT_OVERRIDES` in `pupa.py`, and `MONITOR_BLACK_SCENE` in Windows' `secrets_local.py` (a per-machine gitignored file, not shared code, but still needed the fix for monitor alternation to keep working).
+- **`OBS_CONFIG.md` rewritten** for the new naming-convention contract as the primary interface documentation - suffix table, `black_color` requirement, slide-by-content detection, what's still NOT discoverable (meta_pair_duos, STROBE_COLOR_WEIGHTS, transition intensity) and why.
+- **Live-verified twice, real OBS collection (operator had already renamed everything in parallel while this was being built)**:
+  1. Deleted `scenes_config.yaml` entirely, ran discovery cold: 4 couples, 5-scene shared `_B` pool, 4 `_kick`, correct 6 `_color` (incl. `black_color`), 4 `_wave`, 4-entry `identity_sets` (red/yellow/blue/green only, post-fix) - all matching the real collection, `DEGENERATE_MODE=False`. Colors read live matched expected values exactly. **Slide detection found something real and unexpected**: `montezuma_A` and `futureflash_A` (both nominally "video" `_A` scenes) also contain a nested slideshow source (`Presentazione di immagini 3 2`/`4 2`) - flagged to the operator as a possible leftover rather than assumed correct; **operator confirmed this is intentional, they ARE slides too** - a genuine case of content-based discovery correctly surfacing something a hand-maintained config might have missed or required manual updating for.
+  2. Full functional live test with real music after all changes: scene switches, cut bursts, wave_kick alternation all fired normally against the newly-discovered/renamed scene set, zero errors in the log - operator confirmed "tutto a posto."
+- **Process note**: used `EnterPlanMode`/`ExitPlanMode` for this one given the scope (multi-file, architectural, several viable approaches) - spawned 2 parallel `Explore` agents (scenes-side, transitions-side) plus 1 `Plan` agent to synthesize before writing the plan file, then verified the riskiest technical assumption (OBS's `transitionKind` field, needed for the *next* phase) against the live protocol spec via `gh api` before finalizing, rather than asking the operator to discover a wrong assumption later.
+- **Phase B planning discussion, same session, surfaced a real bug in the CURRENT (not future) show**: operator asked what happens if discovery finds more transitions than expected, which led to explaining `_weighted_couple_transition()`'s existing high/low-extremes-only pick (wastes any pool middle), plus flagging Stinger as a higher-risk transition kind (depends on an operator-assigned video file, unlike pure-computed Cut/Fade). Operator then revealed **the current show's own Stinger (used for the wave_kick entrance, `brain.py`, hardcoded 20000ms) has never had a file loaded** - confirmed live via `set_current_scene_transition('Stinger')` + `get_current_scene_transition()`: `transition_settings` is genuinely empty `{}`. Root cause: **OBS's Stinger transition only accepts video files, not images** - the operator wanted to load a `.png` logo, which OBS's UI doesn't allow for that transition kind. **Fixed**: replaced the wave_kick-entrance `"Stinger"` with `"Fade"` (same 20s duration, unchanged) - honest about what it actually does, since Stinger-with-no-media was never producing the intended video-flourish effect. All other `_wave`/config-verified transitions checked at the same time: `Spiral` (used in `identity_sets`) does have a real `luma_image: 'spiral.png'` configured - the wipe transitions are fine, only Stinger was the empty one. Compiled clean.
+- **All Phase B planning additions saved to `[[project_scene_discovery_architecture]]` memory and the plan file** (`C:\Users\Io\.claude\plans\wiggly-moseying-blum.md`): pool-size generalization (weighted pick across the whole pool, not just 2 extremes), unranked-transition default changed from "assumed calm" to "assumed middle," kind-based lookup removing the need for dual English/Italian name lists, `STROBE_TRANSITION_CHOICES`/`OVERLAP_TRANSITION_CHOICES` needing the same generalization as the main pool, Stinger treated as opt-in/higher-risk rather than auto-trusted, and `transitionFixed` exclusion from energy-scaled duration logic.
+- **Live-tested the Stinger->Fade swap immediately, found a real regression**: operator watched a live music test and reported low-energy states (INTRO/BREAK, where `wave_kick<->_A` is the dominant cycle) had gone noticeably static - scene_B presence almost disappeared, `_kick`/`_A` scenes sitting on screen far longer than before. **Root cause, found by re-reading the fix**: the wave_kick-entrance duration was hardcoded `20000ms` (20 real seconds) - harmless with the old Stinger because it's `transitionFixed: True` in OBS (the requested duration was very likely silently ignored, OBS using its own short internal fallback for an unconfigured stinger), but Fade is NOT fixed-duration, so switching to it made OBS **actually honor** a genuine 20-second crossfade on every single wave_kick entrance - drastically longer than the normal `FADE_DURATION_RANGE` (500-2800ms) every other fade in the codebase uses. This fully explains the "everything more static, scene_B vanished" report: a huge fraction of INTRO/BREAK time was now spent inside one long crossfade. **Fixed**: wave_kick entrance now uses `_get_fade_duration_ms()` (same energy-reactive duration as every other fade), not a disconnected fixed constant.
+- **Same fix, extended per operator request**: instead of always "Fade," wave_kick's entrance now picks randomly between `"Fade"` and `"Digital Gltch"` (exact name incl. the install's own typo, verified via `get_scene_transition_list()` - a `shadertastic_transition`-kind transition already configured and available, not fixed-duration either) - two honest options instead of one, replacing the never-functional Stinger with something that actually varies. Live-tested: durations back to normal range (967-2799ms observed), `Digital Gltch` firing correctly.
+- **Re-tested immediately after, operator flagged a second, separate issue - pre-existing, not caused by the Stinger fix**: `_kick` scenes "appear at the start of a change and then that's it," `_wave` scenes "only at the hint of a break." Root-caused to `decide_next_scene()`'s wave_kick-entry probability formulas (`brain.py` ~2038-2043): INTRO uses `max(0.2, 1.0 - couple_elapsed/_intro_window())`, BREAK uses `max(0.3, 1.0 - time_in_break/20.0)` - both start near 100% right when the state begins, decaying to a low floor within seconds (BREAK's within just 20s) - exactly matching the "strong at the start, then nothing" report. **Fixed**: raised INTRO's floor 0.2->0.4, raised BREAK's floor 0.3->0.5 and stretched its decay window 20s->40s - `_kick`/`_wave` stay meaningfully present throughout the state instead of only right at onset. Not yet live-tested with this specific change.
+- **Added `"Lightspeed"` transition to the main couple pool** (operator's request) - a real `shadertastic_transition` on this install (confirmed via the same `get_scene_transition_list()` scan that found `Digital Gltch`/checked Stinger). Added to all 4 `_DEFAULT_COUPLE_TRANSITIONS` entries and to `TRANSITION_INTENSITY_RANK` at rank 4 (above `Displace`'s 3) - name suggests a fast/energetic effect, rank is a first guess, adjust after watching it live. Compiled clean.
+- **Kicked off Phase 2 (transitions) for real, same session** - operator gave a concrete redesign spec (unified pool, Lightspeed-only identity signature, wave_kick reusing the main pool) and asked to reread it against the already-written Phase 2 plan (`C:\Users\Io\.claude\plans\wiggly-moseying-blum.md`) before implementing. Caught a real tension: the operator's "5-transition pool, pick 2 weighted by intensity" literally combined with the EXISTING `_weighted_couple_transition()` mechanic (pick only the rank-extremes) would have permanently stranded 3 of 5 pool members - exactly the Phase 2 concern flagged earlier the same day, now concrete rather than hypothetical. Operator confirmed they'd already assumed the planned fix would be applied. Implemented:
+  1. **`_weighted_couple_transition()` generalized** to weigh the WHOLE pool via `random.choices()` instead of a binary high/low pick: `weight_i = p*rank_i + (1-p)*(rank_max+1-rank_i)`, where `p` is the existing per-state `TRANSITION_INTENSITY_PROBABILITY`. Verified the 3 limit cases match the old behavior exactly (p=1 favors highest rank, p=0 favors lowest, p=0.5 gives uniform weights) while now actually using every pool member.
+  2. **`COUPLE_TRANSITIONS` unified into one shared pool** for all 4 scene_A (`Burn, Displace, Digital Gltch, Plasma, Blur`) - same philosophy as the already-shared `ALL_B_SCENES`/`STROBE_COLOR_POOL`, no more per-couple dedicated lists. `Fractal`/`Lightspeed` removed from this pool (Lightspeed moved to identity signature, see below; Fractal dropped from active use per the operator's exact spec).
+  3. **Identity "signature" transition unified to `Lightspeed` for all 4 colors** (`_DEFAULT_IDENTITY_SETS` and the live `scenes_config.yaml`, which had already been discovery-populated without any transition field at all, then briefly given only `Circles` for yellow one session ago) - `Circles`/`Spiral`/`Diaframmatic` fully retired from this role.
+  4. **wave_kick entrance now reuses the exact same pool/mechanism** (`COUPLE_TRANSITIONS.get(self.current_couple_a, ...)` + `_weighted_couple_transition()`) instead of its own separate hardcoded `(Fade, "Digital Gltch")` pair - one single place transitions are chosen from, not two.
+  - Simulated 2000 draws per state against the live-validated pool: RELAX favors Blur(534)/Burn(498) with Plasma(286) rarest; DROP flips to Plasma(520)/Digital Gltch(502) highest with Blur(223) rarest; GROOVE roughly balanced across all 5 - confirms every pool member is reachable now, with the intended state-dependent lean. Compiled clean, not yet tested with real music.
+- **Phase 2 CONFIRMED LIVE with real music** - ~18.5 minute test (18:09:41-18:28:14), zero errors/exceptions in the log (only the expected QLC+ OS2L connection failure, server not running). Quantitative results:
+  - Main cycle pool (all 4 couples combined, cut-branch excluded): Displace 38, Burn 36, Plasma 31, Digital Gltch 30, Blur 27 - all 5 reachable, confirmed genuinely shared across all 4 scene_A (each couple showed all/most of the 5, not one dominant couple hogging the pool).
+  - Per-state weighting matches the design intent: RELAX favored Displace(12)/Blur(11) with Plasma/Digital Gltch nearly absent; BUILD favored Plasma(12)/Digital Gltch(10). DROP had only 13 pool samples (most DROP-state transitions route through the separate Taglio/cut_prob branch instead, expected) - too few to judge bias, no structural anomaly though.
+  - Identity signature: 6/6 couple changes used `Lightspeed` - 100% consistent.
+  - wave_kick: 104 entrances spread evenly across the full test duration (not clustered at state-onset - confirms the earlier floor-rebalancing fix still holds), same shared pool/weighting as the main cycle. Return-to-A always Fade, mean 1435ms, max 2795ms - **no 20-second holds**, the Stinger-era duration bug stays fixed.
+  - Operator confirmed and closed out the test ("ferma e analizza" -> reviewed together).
+
+## 2026-07-29 (new session, "arieccoci") - full lighting sync plan kicked off, Step 0 completed the hard way
+
+- **New master plan requested**: operator asked for a complete PUPA<->QLC+ lighting sync plan beyond the existing 4-item roadmap - explicitly wants quiet-state ambient lighting (soft wash replacing kick-pulses during INTRO/BREAK/RELAX), fixture alternation mirroring the monitor A/B sequencer, and a genuinely full-fledged lighting interface (not just a mirror of the OBS color overlay). Planned via EnterPlanMode - 6 steps: 0 (separate the 2 fixtures in QLC+), 1 (frame-accurate strobe via Master), 2 (ambient quiet mode), 3 (fixture alternation), 4 (rest of old roadmap - reconnect resilience, yellow calibration), 5 (docs closure). Full plan at `C:\Users\Io\.claude\plans\wiggly-moseying-blum.md`.
+- **Step 4's reconnect resilience item done immediately** (independent, low-risk): `qlc_controller.py`'s `_send()` now calls a new `_ensure_connected()` - retries `connect()` on failure but throttled to once per `reconnect_interval` (default 5s) via `time.monotonic()`. Verified via an isolated scratch test (mocked `connect()`): 50 rapid calls -> 1 real attempt, then 1 more after the throttle window.
+- **Step 0 (separate the 2 fixtures) - direct XML approach instead of GUI clicking**: operator asked "non si può scrivere un file di configurazione che QLC+ possa leggere senza allungare il lavoro su questa interfaccia grafica?" - verified the real `.qxw` XML schema by reading QLC+'s actual source (`gh api` on `mcallegari/qlcplus`, `vcslider.cpp`/`vcwidget.cpp`) before touching the real show file. Read the real `pupa.qxw` (only 186 lines) - confirmed both fixtures (`Generic Dimmer [1]`/`[2]`, IDs 0/1, addresses 0/7) and that the 4 existing shared sliders each hold 2 `<Channel>` entries (one per fixture) - exactly why they were shared. File moved (copy, not destructive) from `C:\QLC+5\pupa.qxw` to `F:\Desktop\pupa\QLC+\pupa.qxw` per operator request, kept a pristine backup (`.orig-bak`).
+- **First attempt (10 new sliders on a separate "Pagina 2") looked broken live** - operator reported "funziona solo il generic 1", then contradictory readings across several rounds of screenshot-based debugging (HTP-merge theory tested and disproven, a full QLC+ restart tried, Input/Output patch checked and found intact). Root cause finally found by testing directly on the SAME VC page as the working sliders: **QLC+ only delivers external (OS2L) input to widgets on the Virtual Console page that is currently the frontmost/active tab** - Pagina 1 (old shared sliders) always worked because it's the default page on open; Pagina 2 (new sliders) was "deaf" until manually selected. Confirmed by switching to Pagina 2 and re-sending - the slider moved instantly.
+- **Operator explicitly pushed back on keeping 2 pages** ("conviene tenere mezze robe su una pagina e mezze su un'altra? ha senso?") even after a lighter fix was found (a WebSocket `VC_PAGE|<n>` command that forces a page active) - agreed a real 2-page split made no sense long-term. **Step 0 rebuilt from the pristine backup**: the 4 old shared sliders deleted entirely, the 10 per-fixture sliders moved onto Pagina 1 itself (now the single, default, always-frontmost page). `pupa.py` updated to match - old single `QLC_CHANNEL_R/G/B/STROBE` (ids 0-3, now nonexistent) replaced with per-fixture constants + pairs (`QLC_CHANNEL_F1_*`/`F2_*`, `*_PAIR`) and a new `_qlc_set_rgb_both()` helper that mirrors the same RGB to both fixtures (until Step 3's real alternation differentiates them). **Master is now under OS2L control for the first time** (previously fixed at 255 via Simple Desk, never touched by PUPA) - explicitly set to 255 for both fixtures at connect time, since the new Master sliders default to 0 and would otherwise leave the rig dark.
+- **QLC+'s Web API discovered and set up, replacing screenshots for diagnostics** - operator's own suggestion ("mettiamo in piedi la versione web di QLC+... forziamo QLC+ a scriverci qualcosa su file") after getting frustrated with the slow screenshot-based debugging loop ("ci metti 2h per spostare una leva: o troviamo un metodo migliore o passo a ChatGPT"). Verified via real docs (`gh api` on `mcallegari/qlcplus-docs`): the web/WebSocket API is enabled only via a launch flag (`qlcplus-qml.exe -w -o "<project>"`, not a GUI checkbox), default port 9999, pipe-separated text protocol (`QLC+API|<command>|<args>`). Key commands: `isProjectLoaded`, `getWidgetsList`, `getChannelsValues|<universe>|<address>|<count>` (real DMX values, 1-based). New `qlc_web_monitor.py`: connects via WebSocket, writes a JSON snapshot (channels + widgets + project state) to `logs/qlc_live_state.json`, looped or `--once`. Verified end-to-end: OS2L command -> real DMX channel change -> confirmed numerically via the WebSocket readback, zero screenshots needed for the rest of the session.
+- **Config change, unrelated to QLC+ itself**: operator asked to require explicit confirmation before any future computer-use (desktop/mouse) action, feeling today's screenshots/clicks happened too freely even though `request_access` had been granted once. Added `"permissions": {"ask": ["mcp__computer-use__*"]}` to the global `~/.claude/settings.json` - every computer-use tool call will now prompt individually, not just the initial app grant.
+- **Process lesson for future sessions**: when a physical rig test looks broken, check the VC-page-frontmost requirement FIRST, before chasing HTP/output-patch/restart theories - would have saved a long detour this session.
+- **Operator feedback, explicit**: "la tua missione è quella di un programmatore/sviluppatore/sys admin... approccio più professionale" - default to code/config-file/API solutions over computer-use/GUI clicking going forward, on this project and generally (saved as a standing feedback memory, `feedback_professional_dev_approach`).
+- **Steps 1 and 2 of the lighting plan implemented immediately after, pure code, no GUI**:
+  - **Step 1 (frame-accurate strobe via Master)**: new `brain.is_strobe_frame_on()` (`model.burst_active and burst_step % 2 == 0`) alongside the existing `is_strobe_burst_active()`. `pupa.py`'s strobe sync no longer touches the Strobe channel at all (ids kept assigned/documented, just unused by PUPA now) - drives Master directly: 255 on the burst's "on" frame, 0 on the "off" frame, back to a fixed 255 baseline outside any burst. Edge-detected send (`qlc_master_strobe_last`), not per-tick. Verified via an isolated simulated 8-frame burst: sequence `off,ON,off,ON,off,ON,off,ON,off` (the leading "off" is the pre-first-tick transient, harmless in real use), clean end state after.
+  - **Step 2 (ambient quiet-state lighting)**: new `brain.get_ambient_light(current_time)` (+ model method), active only for `State.INTRO/BREAK/RELAX`, returns a 0.0-1.0 intensity (cosine breath, 10s period, 22% peak) or `None` outside those states - color stays `get_identity_color_name()`, resolved to RGB by `pupa.py` same as the kick-pulse always has. **Scope clarified during implementation**: the replacement is QLC+-lights-only - OBS's on-screen color overlay stays kick-reactive in every state unchanged, since this whole plan is scoped to the physical lights, not the video. `pupa.py`'s kick-pulse block now skips its 3 QLC+ sends whenever ambient is active, and a separate throttled (10Hz) block sends the ambient wash instead. Verified via an isolated curve simulation: smooth 0->0.11->0.22(peak)->0.11->0 cycle, correctly `None` for GROOVE, correctly active for RELAX.
+  - Both steps compiled clean, logically verified in isolation - **neither live-tested with real music yet** (OBS wasn't running this session to allow a full end-to-end test).
+- **Real hardware bug found and fixed, unrelated to any software change today**: after OBS+music started and `pupa.py` launched for the actual live test, operator reported "solo un faro acceso" then "1 luce bianco forte e l'altro rosso debole". Diagnosed methodically via `qlc_web_monitor.py` (not screenshots) instead of guessing: repeated live channel reads showed F1 and F2 receiving **numerically identical** Master/R/G/B values every single time - proved the software (PUPA -> OS2L -> QLC+ -> DMX) was symmetric and correct. Root-caused with a clean isolated test (`pupa.py` stopped, one fixture driven at a time via scratch scripts): F1 alone responded correctly to Master+Red=255; F2 alone, same exact values, did not respond at all. **Real cause: Fixture 2's physical DMX address was set to 10 on the unit itself, not 8 as QLC+'s project assumed** - operator checked and fixed it by hand, F2 lit correctly afterward. Final symmetric test (both fixtures, Master+Red=255 simultaneously) confirmed matching. Nothing in `pupa.qxw`/`pupa.py`/`qlc_controller.py` was at fault - a good example of the new file/API-based diagnostic approach (see `feedback_professional_dev_approach`) cutting straight to the real cause instead of chasing software theories.
+- **Remaining lighting-plan steps (3 and 5) implemented back-to-back, no live test in between, per explicit operator request** ("scrivi tutti gli step successivi poi facciamo un test all in 1"):
+  - **Step 3 (fixture alternation)**: new `brain.get_light_outputs()`/`_advance_light_sequence()` + `LIGHT_SEQUENCE_BARS`/`LIGHT_BREATHER_*` - a twin of the existing monitor-alternation mechanism (`get_monitor_outputs`), referencing the same `MONITOR_*` tables directly rather than copying them, but with fully independent phase state (`light_seq_phase`) so it doesn't have to stay in lockstep with monitor alternation. `pupa.py`'s `_qlc_set_rgb_both()` now takes `current_time`, reads the gate, and **attenuates** (15%, not a hard zero) whichever fixture isn't "featured" in the current A/B phase - chosen deliberately since a hard off read as a possible hardware fault during today's earlier debugging. Verified via a 200-beat synthetic simulation: balanced A/B distribution, breathers present, DROP/PEAK correctly force both fixtures on.
+  - **Step 5 (documentation closure)**: new `LIGHTS_CONFIG.md` - the per-fixture OS2L id table, the hard single-VC-page requirement (root cause of today's big detour), what stays deliberately manual (mode/Ch6), Web API setup for diagnostics. `CLAUDE.md` updated with a pointer + corrected the now-stale "strobe not frame-accurate" note.
+  - All compiled clean (`python -m py_compile *.py`, whole repo). **Nothing in Steps 1/2/3 has been tested with real music yet** - a single combined live test is the deliberately-deferred next step, not run yet at this point in the session.
+- **Combined live test run, real bug found and fixed**: operator reported "le luci si sono spente in prossimità del cambio scena". Added missing debug logging first (`[LIGHT-SEQ]`, `[QLC] wash ambient ATTIVO/disattivato`, `[QLC] pulso disabilitato...`) rather than guess, then a live test immediately caught the exact mechanism in the very first seconds: `[QLC] pulso disabilitato per identita' 'yellow_color' (roll off...)` followed by `[QLC] wash ambient ATTIVO`. **Real bug**: the Step 2 ambient wash checked `overlay_rgb[0]` (which reflects whether the KICK-PULSE is enabled for this couple, `COLOR_OVERLAY_OFF_PROBABILITY` roll) before sending anything - when an identity's pulse rolls "off" AND the state is a quiet one, neither the kick-pulse nor the ambient wash sends anything, leaving the physical lights stuck at 0 for the couple's whole ~4min duration. **Fixed**: new `identity_rgb_raw[0]` tracks the identity's raw color independent of the off-roll (set unconditionally on every identity change), and the ambient wash block now checks `identity_rgb_raw[0]` instead of `overlay_rgb[0]` - the off-roll still suppresses the sharp kick-flash as designed, but no longer blocks the ambient wash, since they're two independent creative decisions about the same color. Re-tested live (~2.5min, real music): zero errors, dozens of clean RELAX/GROOVE ambient toggles, light-seq phase changes at expected bar counts - the specific off-roll+ambient combination didn't randomly recur in this run (35% roll), so the fix is verified by code logic + absence of regressions rather than a second direct catch; offered a forced-probability retest, not yet done.
+- **New standing behavior, operator request ("spegni sempre anche le luci con pupa")**: `pupa.py`'s shutdown `finally` block now zeros all 10 lighting channels (both fixtures' Master/R/G/B/Strobe) whenever PUPA exits - Ctrl+C, exception, or normal completion. Previously lights stayed at whatever the last-sent values were. Note: a forceful `taskkill /F` (used only for this session's own testing, not real operator usage) bypasses Python's exception handling entirely and skips this cleanup - a normal Ctrl+C (the real shutdown path) does not.
+- **Color palette redesign, operator request**: removed `yellow_color`/`yellow_wave` entirely (operator deleted the OBS scenes first) - the identity rotation is now RGB-pure primaries only (`red_color` (255,0,0), `green_color` (0,255,0), `blue_color` (0,0,255), replacing the previously hand-tinted values with magenta/mixed-hue casts). White stays reserved for the strobe pool only, never a rotating identity. Updated: `pupa.py`'s `IDENTITY_OVERLAY_RGB` (3 entries now) and `COLOR_OVERLAY_PEAK_PCT_OVERRIDES` (emptied, was yellow-only); `brain.py`'s `STROBE_COLOR_WEIGHTS` (green now the INTRO/BREAK/RELAX calm-state accent, taking over yellow's old role - red stays GROOVE/BUILD, blue stays DROP/PEAK) and the cold-start `_DEFAULT_STROBE_COLOR_POOL`/`_DEFAULT_IDENTITY_SETS` fallbacks (3 entries, for consistency even though dead in practice once `scenes_config.yaml` has real content); `scenes_config.yaml` itself (removed yellow from `strobe_color_pool` and its `identity_sets` entry directly, rather than relying on runtime `validate_scenes()` filtering). Compiled clean, RGB values confirmed pure via direct import. Not yet live-tested.
+- **Open design question, not yet decided**: operator proposed inverse monitor/lights alternation (lights on only when monitors are in their `both_off` breather phase, off while monitors show video) - explicitly connects to the pre-existing "lights and video complementary" design vision from an earlier session. Suggested simplifying Step 3's independent `light_seq_phase` state machine into a direct derivation from monitor's `both_off` phase instead of keeping it standalone - operator hasn't yet said whether to replace Step 3 entirely or layer this on top of the existing A/B fixture alternation. Not implemented, awaiting operator's direction.
+- **Clarified as a real feature request, not an observation**: "quando pupa si ferma si devono stoppare anche i software connessi (qlc luci spente e obs monitor neri)". `pupa.py`'s shutdown `finally` block now also switches OBS to `brain.BLACK_PAUSE_SCENE` (Taglio, instant, since it's mid-shutdown anyway) right before disconnecting - paired with the already-built QLC+ lights-off. Wrapped in its own try/except with debug logging (doesn't block the rest of shutdown if it fails).
+- **STROBE_COLOR_WEIGHTS redesign, operator request**: removed the RGB accent color entirely (green had just replaced yellow there minutes earlier - now gone too) - white/black only, but the MIX RATIO varies by state instead of a fixed 35/35/30 split, producing "shades of gray" statistically rather than via dedicated gray `_color` scenes (which don't exist in OBS and weren't requested): calm states (INTRO/BREAK/RELAX) skew black-heavy (30/70, darker), mid (GROOVE/BUILD) balanced (50/50), hard (DROP/PEAK) skew white-heavy (70/30, brighter).
+- **3 light-behavior modes scaffolded (commented, not wired up), operator request**: "sync" (both fixtures always show the same color, no alternation - the pre-Step-3 default), "alternate" (Step 3's independent A/B, now moved to `_get_light_outputs_alternate()`), "inverse" (operator's new idea - lights complementary to the monitors, connects to an earlier session's "lights/video complementary" design vision). Documented as a comment block above `get_light_outputs()` in `brain.py`, explicitly not hotkey-wired yet per the operator's own instruction ("mantieni le 3 opzioni solo commentandole per ora") - `get_light_outputs()` is a manual dispatcher for now (one line to swap which mode is active), a future session should build the real hotkey-driven `LIGHT_MODE` selector (same pattern as `set_calm_level`/`set_loop_scene`).
+- **"inverse" mode implemented and live-tested with real music (dub techno)**: first version (`lights_on = not show1 and not show2`, both fixtures together) tested live - operator confirmed it worked but wanted per-POSITION complementary behavior instead of all-or-nothing: 1 monitor on/1 off should mean 1 light on/1 off (the one matching the OFF monitor), not both lights reacting to whichever monitor state. **Fixed**: `_get_light_outputs_inverse()` now returns `{"fixture1": not show1, "fixture2": not show2}` - verified via simulation against all 4 monitor phases (A, B, both_off, both_on), each producing exactly the pairing the operator specified. Strobe is unaffected either way (drives Master per-frame independently of this gate, Step 1).
+- **Deferred, documented as a TODO in code (not implemented, would have required guessing the mechanism)**: operator wants the corresponding light to light up as an "emphasis" whenever the matching monitor is showing its `_wave` scene, regardless of what the base inverse rule would otherwise say - requires `pupa.py` to tell `brain.py` which scene is visible on which monitor side (show1/show2), a link that doesn't exist today (`get_monitor_outputs()` only knows the A/B/both_on/both_off phase, not scene content). Needs proper design next session, not a quick guess.
+- **Second live test of "inverse", real bug found and fixed**: operator reported "non sembrano andare a tempi alterni le luci e monitor: cambi monitor veloci mentre le luci sembrano addormentate nei cambi" (lights lag behind fast monitor changes). Root cause: `_qlc_set_rgb_both()` (and the `brain.get_light_outputs()` gate it reads) was only ever invoked from kick-pulse/kick-decay/ambient-wash events - if the monitor's A/B/both_on/both_off phase flipped between those events, the physical lights kept showing the OLD gate's output until the next kick or ambient tick happened to fire, however long that took. **Fixed**: new module-level `_qlc_last_logical_rgb` tracks the last "pre-gate" RGB requested by whichever path last ran; a new per-tick check (right after the Step 1 strobe sync block) computes `brain.get_light_outputs()` fresh every loop iteration (~20Hz) and, the instant it differs from the last-applied gate, immediately re-sends `_qlc_last_logical_rgb` through the new gate - lights now react within one tick of a monitor flip instead of waiting for the next unrelated kick/ambient event. Added `[QLC] gate cambiato -> ...` debug logging for this new path (didn't exist for the first "inverse" test, making it impossible to confirm timing from the log alone - fixed for future analysis).
+- **Shutdown gap found during testing (not from the fix itself)**: operator reported "quando hai stoppato pupa obs su nero ok ma le luci rimaste accese su blu fisso" after one test stop - the OBS black-scene switch worked but the QLC+ lights-off didn't. Root cause: the shutdown code only zeroed the lighting channels `if qlc.sock is not None` - if the OS2L socket happened to be down at that exact instant (e.g. a transient disconnect), the whole zero-out block silently skipped. **Fixed**: shutdown now actively calls `qlc.connect()` first if the socket is down, then zeros the channels, with a printed fallback message if reconnection genuinely fails. Note for next session: testing this session used `taskkill /F` to stop `pupa.py` (forceful termination, bypasses Python's `finally` entirely - confirmed by re-observing stale channel values immediately after a taskkill) - the graceful-shutdown code path only actually runs on a real Ctrl+C, which is how the operator stops PUPA for real; every `taskkill`-stopped test this session needed the lights zeroed by hand afterward as a workaround, not a sign the fix itself is broken.
+- **Session ended here** ("basta a nanna") - color redesign, 3 light-mode scaffold, and the "inverse" mode (both known bugs fixed) are implemented and compile clean, but the LATEST fix (immediate gate reapplication + its debug logging) was never live-tested before the session closed - first thing to verify next time.
+- **Operator's closing note, confirmed still broken, explicitly deferred**: "quando pupa si ferma obs rimane acceso sull'ultima scena usata e luci accese" - the graceful-shutdown fixes (OBS->black_color, QLC+ lights-off) are NOT actually taking effect in real usage yet, despite being implemented and code-reviewed this session. Likely candidates to check next time: whether Ctrl+C is really how the operator stops PUPA (vs. closing the terminal window, which - like this session's own `taskkill /F` testing shortcut - would bypass Python's `finally` block entirely and needs a different mechanism, e.g. an OS-level exit/signal handler or `atexit`), or a bug in the fix itself not yet caught. Operator explicitly said to pick this up tomorrow, not tonight.

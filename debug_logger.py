@@ -11,7 +11,8 @@ def setup_debug_logger(name="pupa_debug", log_file="debug.log", max_bytes=100000
 
     Args:
         name: nome logger
-        log_file: file di output
+        log_file: file di output (nome, non percorso - finisce sempre in logs/,
+            2026-07-17: prima scriveva nella root del progetto)
         max_bytes: max dimensione file prima di rotate (100KB default)
         backup_count: quanti file backup mantenere
     """
@@ -22,9 +23,11 @@ def setup_debug_logger(name="pupa_debug", log_file="debug.log", max_bytes=100000
     if logger.handlers:
         return logger
 
+    os.makedirs("logs", exist_ok=True)
+
     # RotatingFileHandler - crea backup quando raggiunge max_bytes
     handler = RotatingFileHandler(
-        log_file,
+        os.path.join("logs", log_file),
         maxBytes=max_bytes,
         backupCount=backup_count
     )

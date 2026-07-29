@@ -157,6 +157,58 @@ class OBSController:
             debug_log(f"[OBS] get_transition_list fallito: {e}")
             return []
 
+    def get_all_inputs(self):
+        """Tutte le sorgenti (input) di questa installazione OBS, con nome
+        e kind (versionato e non) - usato da scene_discovery.py per
+        riconoscere slide (kind 'slideshow', qualunque versione - es.
+        'slideshow_v2') e sorgenti colore (kind 'color_source_v3') per
+        CONTENUTO invece che per nome hardcoded."""
+        try:
+            return list(self.client.get_input_list().inputs)
+        except Exception as e:
+            debug_log(f"[OBS] get_all_inputs fallito: {e}")
+            return []
+
+    def get_scene_item_source_names(self, scene_name):
+        """Nomi delle sorgenti nidificate in una scena - usato da
+        scene_discovery.py per il riconoscimento slide/colore per
+        contenuto (stesso get_scene_item_list di flash_scene, solo nomi)."""
+        try:
+            items = self.client.get_scene_item_list(scene_name).scene_items
+            names = []
+            for it in items:
+                if isinstance(it, dict):
+                    names.append(it.get('sourceName'))
+                else:
+                    names.append(getattr(it, 'source_name', None))
+            return [n for n in names if n]
+        except Exception as e:
+            debug_log(f"[OBS] get_scene_item_source_names fallito ({scene_name}): {e}")
+            return []
+
+    def get_scene_color(self, source_name):
+        """Legge il colore RGB REALE di una sorgente color_source_v3 (es.
+        la 'Colore N' propria di una scena _color) - inverso del pack ABGR
+        usato da set_overlay_color() (verificato empiricamente contro le
+        sorgenti colore esistenti: 'Colore 3'/giallo letto come (255,255,127)
+        e 'Colore 6'/verde come (0,170,0) combaciano esattamente con i
+        valori "originali pre-taratura" documentati in pupa.py). Usato per
+        popolare IDENTITY_OVERLAY_RGB dal vivo per le identita' mai tarate
+        a mano, invece di un dizionario hardcoded fisso."""
+        try:
+            resp = self.client.get_input_settings(source_name)
+            settings = resp.input_settings if hasattr(resp, 'input_settings') else resp.get('inputSettings', {})
+            color_int = settings.get('color')
+            if color_int is None:
+                return None
+            r = color_int & 0xFF
+            g = (color_int >> 8) & 0xFF
+            b = (color_int >> 16) & 0xFF
+            return (r, g, b)
+        except Exception as e:
+            debug_log(f"[OBS] get_scene_color fallito ({source_name}): {e}")
+            return None
+
     def flash_scene(self, scene_name):
         """Lampeggia una scena disabilitando e riabilitando tutti i suoi
         scene item - usato in MODALITA' DEGENERATA (vedi brain.validate_scenes)
@@ -238,6 +290,49 @@ class OBSController:
         except Exception as e:
             debug_log(f"[OBS] set_input_text fallito ({input_name}): {e}")
             return False
+
+    def set_overlay_color(self, input_name, rgb, opacity_pct=100):
+        """Aggiorna il colore/opacita' di una color_source_v3 (es. 'color_overlay',
+        2026-07-16: sorgente condivisa nidificata in scene_A/_B/kick per rinforzare
+        la percezione del colore dell'identita' corrente - vedi brain.get_identity_color_name()).
+
+        Il campo 'color' di OBS e' un intero a 32bit in formato ABGR (byte piu'
+        significativo = alpha), NON RGBA/ARGB come ci si aspetterebbe - verificato
+        empiricamente leggendo il valore delle sorgenti colore gia' esistenti
+        (red_master/blue_master/ecc.) prima di scrivere questo metodo."""
+        r, g, b = rgb
+        a = round(opacity_pct / 100 * 255)
+        color_int = (a << 24) | (b << 16) | (g << 8) | r
+        try:
+            self.client.set_input_settings(input_name, {"color": color_int}, overlay=True)
+            return True
+        except Exception as e:
+            debug_log(f"[OBS] set_overlay_color fallito ({input_name}): {e}")
+            return False
+
+    def get_render_stats(self):
+        """Statistiche di rendering REALI di OBS (fps, tempo medio di render,
+        fotogrammi persi in render/output, CPU auto-riportata da OBS) - mai
+        raccolte in modo permanente prima d'ora (solo a mano, script Linux a
+        parte durante un test esplicito) - vedi runtime_monitor.py. Nomi dei
+        campi confermati dal vivo su questa installazione (obsws_python
+        GetStats). None se la chiamata fallisce (WebSocket in difficolta'),
+        il chiamante decide come trattarlo - non un default silenzioso, dato
+        che qui il fallimento stesso e' un segnale utile."""
+        try:
+            s = self.client.get_stats()
+            return {
+                "fps": getattr(s, "active_fps", 0.0),
+                "avg_render_time_ms": getattr(s, "average_frame_render_time", 0.0),
+                "render_skipped": getattr(s, "render_skipped_frames", 0),
+                "render_total": getattr(s, "render_total_frames", 0),
+                "output_skipped": getattr(s, "output_skipped_frames", 0),
+                "output_total": getattr(s, "output_total_frames", 0),
+                "cpu_usage": getattr(s, "cpu_usage", 0.0),
+            }
+        except Exception as e:
+            debug_log(f"[OBS] get_render_stats fallito: {e}")
+            return None
 
     def get_monitor_list(self):
         """Lista dei monitor come li vede OBS (monitorIndex, posizione X/Y,
