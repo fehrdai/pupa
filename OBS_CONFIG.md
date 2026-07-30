@@ -43,10 +43,22 @@ Also: OBS does **not** appear to autosave promptly on this rig — a collection 
 **`scenes_config.yaml` is now a PUPA-generated artifact, not a hand-authored one.** At every startup, `brain.discover_and_merge_config()` fills in any *missing* section (`couples`, `strobe_color_pool`, `identity_sets`) from the live discovery above and writes the result back to the file — so it's inspectable after the fact, but an operator starting a brand-new show doesn't need to touch it at all if the scene names follow the convention. A section that's already explicitly present in the file is left untouched (config wins over discovery when both exist) — this is the escape hatch for curated pairings the naming convention can't express, e.g. `meta_pair_duos` (still fully manual, see `PUPA_ARCHITECTURE.md`) or a hand-picked `couples` mapping instead of the "every scene_A gets the whole scene_B pool" default.
 
 - **Identity bundles** (`scenes_config.yaml`'s `identity_sets`, one per non-black `_color` scene when auto-discovered): ties together `{color, wave_kick, waveform}` — `waveform` is matched by shared base name (`red_color` pairs with `red_wave`) when one exists, `wave_kick` is assigned round-robin across the discovered `_kick` scenes. `transition` isn't derivable from OBS at all (creative/aesthetic, see the per-transition-intensity note below) and is left unset unless the config explicitly sets it — PUPA's existing per-field fallback in `validate_scenes()` handles a missing field gracefully.
-- **Color RGB values**: read live from OBS (the scene's own `color_source_v3` item, excluding shared/structural ones like `color_overlay`/`black_overlay`/`PUPA_CALM_*`/`PUPA_LOOP_SCENE`) for any `_color` scene never manually tuned. `pupa.py`'s `IDENTITY_OVERLAY_RGB` keeps a few hand-tuned overrides (yellow darkened, green lightened — both were "si vede poco" at their true OBS color) that still win over the live read.
+- **Color RGB values**: read live from OBS (the scene's own `color_source_v3` item, excluding shared/structural ones like `color_overlay`/`black_overlay`/`PUPA_CALM_*`/`PUPA_LOOP_SCENE`/`PUPA_BLACKOUT`) for any `_color` scene never manually tuned. `pupa.py`'s `IDENTITY_OVERLAY_RGB` keeps a few hand-tuned overrides (yellow darkened, green lightened — both were "si vede poco" at their true OBS color) that still win over the live read.
 - **Utility scenes** (no suffix, not discovered as content): `PUPA_Control` (hidden control surface — never put on air), `webcam`, `farefesta`.
 
 Case-sensitive, exact suffix match — this is the whole naming contract.
+
+## Hotkey control sources (inside `PUPA_Control`, never on air)
+
+PUPA has no native "hotkey" concept over the WebSocket API — the trick (see `hotkey_controller.py`) is that the operator binds a real keyboard key, in OBS's own Settings → Hotkeys, to the **Show** action of a dedicated dummy source living in the `PUPA_Control` scene; PUPA polls that source's visibility and reacts. To add a new one: create the source in `PUPA_Control`, bind a hotkey to its "Show" (not "Show and Hide") action in OBS, and register the source name in `pupa.py`. Current sources:
+
+| Source name | Type | Behavior |
+|---|---|---|
+| `PUPA_CALM_0`..`PUPA_CALM_3` | 4-way exclusive | "Mostra"-only hotkeys — the **most recently shown** wins (not the highest level), autopulizia hides the rest. See `brain.CALM_MULTIPLIERS`. |
+| `PUPA_LOOP_SCENE` | binary toggle | Freezes the current scene_A's 4min timer. |
+| `PUPA_BLACKOUT` (2026-07-30) | binary toggle | Forces monitors to `black_color` and all QLC+ channels to 0 **without stopping PUPA** — internal timers/energy-tracking freeze in place and resume exactly where they left off on toggle-off, no explicit "resume" logic. For technical pauses/mic announcements. |
+
+Not yet built: a runtime selector for `brain.get_light_outputs()`'s 3 modes (`sync`/`alternate`/`inverse`) — same mechanism, deferred.
 
 ### What's still NOT discoverable from OBS (creative/curatorial, stays hardcoded or config-driven)
 

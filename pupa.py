@@ -21,6 +21,7 @@ from logger import setup_logger
 from debug_logger import debug as debug_log
 from runtime_monitor import RuntimeMonitor
 from window_manager import get_window_manager
+from hotkey_controller import MultiLevelControl, BinaryControl
 
 try:
     from secrets_local import OBS_HOST, OBS_PORT, OBS_PASSWORD, AUDIO_DEVICE_NAME
@@ -269,6 +270,8 @@ QLC_CHANNEL_F2_STROBE = 19
 # Step 1 in poi - il canale Strobe autonomo del fixture non era mai a tempo,
 # sostituito dal pilotaggio diretto di Master per-frame (vedi sotto). Gli id
 # restano documentati/assegnati in QLC+ per eventuale uso manuale.
+ALL_LIGHT_CHANNELS = (QLC_CHANNEL_F1_MASTER, QLC_CHANNEL_F1_R, QLC_CHANNEL_F1_G, QLC_CHANNEL_F1_B, QLC_CHANNEL_F1_STROBE,
+                      QLC_CHANNEL_F2_MASTER, QLC_CHANNEL_F2_R, QLC_CHANNEL_F2_G, QLC_CHANNEL_F2_B, QLC_CHANNEL_F2_STROBE)
 QLC_AMBIENT_SEND_INTERVAL_S = 0.1  # throttle del wash ambient (Step 2) - 10Hz basta per un respiro di AMBIENT_BREATH_PERIOD_S secondi
 QLC_LIGHT_ATTENUATED_SCALE = 0.0  # 2026-07-30: era 0.15 (pensato per "alternate" - il fixture non "in vista" attenuato invece di spento del tutto). Con "inverse" attiva ora, un 15% su colori saturi restava visibile ("perche' sono spesso accese entrambe le luci con un solo monitor acceso" - trovato dal vivo, zero {True,True} nei log del gate quindi la logica era corretta, il problema era qui) - lo spec dell'operatore per "inverse" dice esplicitamente "spento", non "attenuato". Rimettere a 0.15 se si torna ad "alternate".
 _qlc_last_logical_rgb = [(0, 0, 0)]  # ultimo RGB "logico" richiesto (pre-gate) - per ri-applicare subito quando il gate cambia (vedi loop principale), non solo al prossimo kick/tick ambient
@@ -347,6 +350,16 @@ CALM_POLL_EVERY_N_TICKS = 10  # ~0.5s a 20Hz - un hotkey premuto a mano non serv
 # funzionando, non portarmela via") - vedi brain.set_loop_scene. Stessa
 # scena di servizio di calm mode, stesso schema di risoluzione/polling.
 LOOP_SCENE_SOURCE = "PUPA_LOOP_SCENE"
+
+# BLACKOUT: hotkey OBS Mostra/Nascondi (binario) per portare monitor e luci
+# a nero SENZA fermare PUPA (2026-07-30, operatore - "serve poter spegnere
+# monitor/luci comandabile da hotkey senza arrestarsi sempre", per pause
+# tecniche/annunci al microfono senza perdere timer/stato interno). Mostra
+# = OBS forzato su BLACK_PAUSE_SCENE + tutti i canali QLC+ a 0, bypassando
+# la logica normale; Nascondi = ripristina, la prossima tick ricalcola tutto
+# da zero (gate/colore/scena) come se il blackout non ci fosse mai stato.
+# Stessa scena di servizio, stesso schema di risoluzione/polling.
+BLACKOUT_SOURCE = "PUPA_BLACKOUT"
 
 # ============================================================================
 # SCALE-TO-SOUND — DISATTIVATO DI NUOVO (2026-07-06)
@@ -506,30 +519,12 @@ def main():
     qlc_light_gate_last = [{"fixture1": False, "fixture2": False}]  # ultimo gate alternanza APPLICATO - ri-applica subito il colore corrente quando cambia (non aspetta il prossimo kick/tick ambient)
     qlc_strobe_rgb_last = [(-1, -1, -1)]  # ultimo RGB raffica strobo INVIATO - sentinella invalida per forzare il primo invio, edge-detected sui cambi successivi
 
-    # CALM MODE: risolvi gli scene_item_id delle 4 source di controllo (vedi
-    # CALM_LEVEL_SOURCES sopra), una volta sola all'avvio. Se la scena di
-    # servizio non esiste ancora (utente non l'ha ancora creata in OBS), il
-    # polling nel loop principale si disattiva da solo - nessun crash.
-    calm_item_ids = {}
-    if CALM_CONTROL_SCENE in scenes:
-        for level, source_name in CALM_LEVEL_SOURCES.items():
-            item_id = obs.get_source_item_id(CALM_CONTROL_SCENE, source_name)
-            if item_id is not None:
-                calm_item_ids[level] = item_id
-        if calm_item_ids:
-            print(f"[PUPA] Calm mode: {len(calm_item_ids)}/4 source di controllo trovate in '{CALM_CONTROL_SCENE}'")
-        else:
-            print(f"[PUPA] Calm mode: scena '{CALM_CONTROL_SCENE}' trovata ma nessuna source CALM_0-3 al suo interno")
-    else:
-        print(f"[PUPA] Calm mode: scena '{CALM_CONTROL_SCENE}' non trovata, hotkey disattivati")
-
-    # Stato di partenza per il rilevamento "appena accesa" (vedi loop
-    # principale) - letto una volta all'avvio cosi' non scatta un falso
-    # cambio livello al primo poll per una source gia' accesa da prima.
-    calm_prev_enabled = set(
-        lvl for lvl, item_id in calm_item_ids.items()
-        if obs.get_scene_item_enabled(CALM_CONTROL_SCENE, item_id)
-    )
+    # HOTKEY (2026-07-30, refactor): il meccanismo di polling/edge-detection
+    # e' ora in hotkey_controller.py (MultiLevelControl/BinaryControl) - qui
+    # restano solo la semantica (quali source, cosa fare quando cambiano) e
+    # l'istanziazione. Vedi hotkey_controller.py per il "perche'" del design.
+    calm_control = MultiLevelControl("Calm mode", CALM_CONTROL_SCENE, CALM_LEVEL_SOURCES)
+    calm_control.resolve(obs, scenes)
 
     # Indicatore a video del livello (CALM_LEVEL_TEXT dentro PUPA_Control,
     # mai in onda - "verifica a video di quale stato sia attivo?", visibile
@@ -541,18 +536,12 @@ def main():
     if calm_text_available:
         obs.set_input_text(CALM_LEVEL_TEXT_SOURCE, "CALM: 0")
 
-    # LOOP SCENA: risolvi lo scene_item_id (stessa scena di servizio di
-    # calm mode). Stato di partenza letto subito dopo, cosi' un residuo
-    # da una sessione precedente non genera un falso "appena attivato".
-    loop_scene_item_id = None
-    if CALM_CONTROL_SCENE in scenes:
-        loop_scene_item_id = obs.get_source_item_id(CALM_CONTROL_SCENE, LOOP_SCENE_SOURCE)
-    if loop_scene_item_id is not None:
-        print(f"[PUPA] Loop scena: source di controllo trovata in '{CALM_CONTROL_SCENE}'")
-        loop_scene_prev_enabled = obs.get_scene_item_enabled(CALM_CONTROL_SCENE, loop_scene_item_id)
-    else:
-        print(f"[PUPA] Loop scena: source '{LOOP_SCENE_SOURCE}' non trovata, hotkey disattivato")
-        loop_scene_prev_enabled = False
+    loop_scene_control = BinaryControl("Loop scena", CALM_CONTROL_SCENE, LOOP_SCENE_SOURCE)
+    loop_scene_control.resolve(obs, scenes)
+
+    blackout_control = BinaryControl("Blackout", CALM_CONTROL_SCENE, BLACKOUT_SOURCE)
+    blackout_control.resolve(obs, scenes)
+    blackout_active = [False]  # stato corrente, letto anche fuori dal blocco di poll (gate luci/monitor)
 
     # ALTERNANZA 2 USCITE MONITOR: attiva solo se configurata in
     # secrets_local.py. window_manager.get_window_manager() sceglie
@@ -737,60 +726,57 @@ def main():
             tick_gap = (current_time - last_tick_time) if last_tick_time is not None else None
             last_tick_time = current_time
 
-            # CALM MODE: polling leggero (non ad ogni frame, vedi
-            # CALM_POLL_EVERY_N_TICKS) delle 4 source di controllo. Vince la
-            # source APPENA accesa (differenza rispetto al poll precedente),
-            # non la piu' alta in assoluto - "vince il piu' alto" sembrava
-            # una rete di sicurezza ragionevole, ma con soli hotkey "Mostra"
-            # (mai "Nascondi") impediva di SCENDERE di livello: premendo un
-            # livello piu' basso mentre uno piu' alto era gia' acceso,
-            # l'autopulizia lo spegneva subito di nuovo perche' il piu' alto
-            # "vinceva" comunque - osservato dal vivo (bloccato su livello 3,
-            # F1/F2/F3 senza alcun effetto).
-            if calm_item_ids or loop_scene_item_id is not None:
+            # HOTKEY: polling leggero (non ad ogni frame, vedi
+            # CALM_POLL_EVERY_N_TICKS) - il meccanismo (edge-detection,
+            # "vince la source appena accesa", autopulizia) e' in
+            # hotkey_controller.py, qui resta solo la dispatch semantica.
+            if calm_control.active or loop_scene_control.active or blackout_control.active:
                 calm_poll_tick += 1
                 if calm_poll_tick >= CALM_POLL_EVERY_N_TICKS:
                     calm_poll_tick = 0
 
-                    if calm_item_ids:
-                        enabled_levels = set(lvl for lvl in calm_item_ids
-                                              if obs.get_scene_item_enabled(CALM_CONTROL_SCENE, calm_item_ids[lvl]))
-                        newly_enabled = enabled_levels - calm_prev_enabled
-                        if newly_enabled:
-                            active_level = max(newly_enabled)
-                        elif enabled_levels:
-                            active_level = max(enabled_levels)  # nessuna pressione nuova, stato invariato
+                    new_calm_level = calm_control.poll(obs)
+                    if new_calm_level is not None:
+                        brain.set_calm_level(new_calm_level)
+                        print(f"[CALM MODE] livello -> {new_calm_level}")
+                        debug_log(f"[CALM MODE] livello -> {new_calm_level}")
+                        if calm_text_available:
+                            obs.set_input_text(CALM_LEVEL_TEXT_SOURCE, f"CALM: {new_calm_level}")
+
+                    new_loop_state = loop_scene_control.poll(obs)
+                    if new_loop_state is not None:
+                        brain.set_loop_scene(new_loop_state, current_time)
+                        print(f"[LOOP SCENA] {'attivo' if new_loop_state else 'disattivato'}")
+                        debug_log(f"[LOOP SCENA] {'attivo' if new_loop_state else 'disattivato'}")
+
+                    # BLACKOUT: attivazione/disattivazione one-shot (vedi
+                    # BLACKOUT_SOURCE sopra) - il vero "congelamento" del
+                    # resto del loop e' il guard "not blackout_active[0]" su
+                    # "if audio_data" poco sotto, non qui.
+                    new_blackout_state = blackout_control.poll(obs)
+                    if new_blackout_state is not None:
+                        blackout_active[0] = new_blackout_state
+                        if new_blackout_state:
+                            obs.switch_scene(brain.BLACK_PAUSE_SCENE, transition_ms=50, transition_type="Taglio")
+                            if qlc.sock is None:
+                                qlc.connect()
+                            if qlc.sock is not None:
+                                for ch in ALL_LIGHT_CHANNELS:
+                                    qlc.set_channel(ch, 0)
+                            print("[BLACKOUT] attivo - monitor e luci a nero, PUPA resta in ascolto")
+                            debug_log("[BLACKOUT] attivo")
                         else:
-                            active_level = 0
-                        calm_prev_enabled = {active_level} if enabled_levels else set()
-
-                        if active_level != brain.get_calm_level():
-                            brain.set_calm_level(active_level)
-                            print(f"[CALM MODE] livello -> {active_level}")
-                            debug_log(f"[CALM MODE] livello -> {active_level}")
-                            if calm_text_available:
-                                obs.set_input_text(CALM_LEVEL_TEXT_SOURCE, f"CALM: {active_level}")
-
-                        # Autopulizia: spegne le altre source rimaste accese,
-                        # cosi' basta il solo hotkey "Mostra" per livello.
-                        for lvl in enabled_levels:
-                            if lvl != active_level:
-                                obs.set_scene_item_enabled(CALM_CONTROL_SCENE, calm_item_ids[lvl], False)
-
-                    # LOOP SCENA: stesso ciclo di polling, ma binario (Mostra/
-                    # Nascondi, non 4 livelli esclusivi) - nessuna autopulizia
-                    # necessaria qui, l'utente controlla ON/OFF direttamente.
-                    if loop_scene_item_id is not None:
-                        loop_enabled = obs.get_scene_item_enabled(CALM_CONTROL_SCENE, loop_scene_item_id)
-                        if loop_enabled != loop_scene_prev_enabled:
-                            loop_scene_prev_enabled = loop_enabled
-                            brain.set_loop_scene(loop_enabled, current_time)
-                            print(f"[LOOP SCENA] {'attivo' if loop_enabled else 'disattivato'}")
-                            debug_log(f"[LOOP SCENA] {'attivo' if loop_enabled else 'disattivato'}")
+                            print("[BLACKOUT] disattivato - ripristino normale dal prossimo tick")
+                            debug_log("[BLACKOUT] disattivato")
 
             audio_data = audio.get_metrics()
-            
-            if audio_data:
+
+            # BLACKOUT: mentre attivo, tutto il resto del tick (transizioni,
+            # QLC+, monitor-seq, slideshow...) e' sospeso - lo stato interno
+            # di brain.py (timer coppie, energy tracking) resta congelato
+            # esattamente dov'era, riprende identico alla disattivazione,
+            # nessuna logica di "resume" dedicata necessaria.
+            if audio_data and not blackout_active[0]:
                 bass = audio_data.get("bass", 0)
                 mid = audio_data.get("mid", 0)
                 hi = audio_data.get("hi", 0)
@@ -1235,8 +1221,7 @@ def main():
             if qlc.sock is None:
                 qlc.connect()
             if qlc.sock is not None:
-                for ch in (QLC_CHANNEL_F1_MASTER, QLC_CHANNEL_F1_R, QLC_CHANNEL_F1_G, QLC_CHANNEL_F1_B, QLC_CHANNEL_F1_STROBE,
-                           QLC_CHANNEL_F2_MASTER, QLC_CHANNEL_F2_R, QLC_CHANNEL_F2_G, QLC_CHANNEL_F2_B, QLC_CHANNEL_F2_STROBE):
+                for ch in ALL_LIGHT_CHANNELS:
                     qlc.set_channel(ch, 0)
                 print("[QLC] Fari spenti.")
             else:
@@ -1248,15 +1233,38 @@ def main():
             # 1: OBS rifiuta SetCurrentSceneTransitionDuration sotto i 50ms,
             # errore codice 402 - trovato dal vivo 2026-07-30 leggendo
             # debug.log, non a intuito) - resta comunque quasi istantaneo.
+            #
+            # 2026-07-30 (stessa sera, dopo un test dubstep): l'operatore ha
+            # visto OBS restare sull'ultima scena viva nonostante il log
+            # mostrasse "[OBS] APPLICATA: Taglio 50ms -> black_color" -
+            # scoperto rileggendo obs_controller.py che quella riga di log
+            # scatta subito dopo aver impostato tipo/durata transizione, PRIMA
+            # della vera chiamata set_current_program_scene() - "APPLICATA"
+            # non ha MAI confermato che lo switch sia arrivato a destinazione,
+            # solo che la transizione era stata configurata. Stessa lezione
+            # di sempre in questo file: un log che conferma che il codice e'
+            # girato come scritto non e' la stessa cosa di una conferma reale.
+            # Fix: verificare DAVVERO con get_current_scene() dopo il sleep,
+            # e ritentare una volta se non e' quella attesa, invece di fidarsi
+            # del solo "nessuna eccezione sollevata".
             obs.switch_scene(brain.BLACK_PAUSE_SCENE, transition_ms=50, transition_type="Taglio")
-            print(f"[OBS] {brain.BLACK_PAUSE_SCENE} in programma.")
-            # Margine prima di disconnettere: la richiesta WebSocket non
-            # blocca fino alla conferma di OBS (o comunque la disconnessione
-            # subito dopo puo' interromperla a meta') - senza pausa lo switch
-            # non arrivava mai a destinazione (ne' sul Program di OBS ne' sul
-            # proiettore), pur senza nessuna eccezione sollevata - trovato
-            # dal vivo 2026-07-30.
+            # Margine prima di verificare: la richiesta WebSocket non blocca
+            # fino alla conferma di OBS - senza pausa la lettura successiva
+            # arriverebbe troppo presto anche a switch riuscito.
             time.sleep(0.3)
+            actual_scene = obs.get_current_scene()
+            if actual_scene != brain.BLACK_PAUSE_SCENE:
+                debug_log(f"[OBS] switch a nero non confermato (scena reale='{actual_scene}') - ritento")
+                obs.switch_scene(brain.BLACK_PAUSE_SCENE, transition_ms=50, transition_type="Taglio")
+                time.sleep(0.3)
+                actual_scene = obs.get_current_scene()
+
+            if actual_scene == brain.BLACK_PAUSE_SCENE:
+                print(f"[OBS] {brain.BLACK_PAUSE_SCENE} in programma (confermato).")
+                debug_log(f"[OBS] {brain.BLACK_PAUSE_SCENE} confermato in programma dopo switch")
+            else:
+                print(f"[OBS] ATTENZIONE: switch a nero NON confermato - scena reale rimasta '{actual_scene}'")
+                debug_log(f"[OBS] switch a nero NON confermato dopo retry - scena reale='{actual_scene}'")
 
         _shutdown_step("spegni luci QLC+", _spegni_luci)
         _shutdown_step("OBS a nero", _obs_a_nero)

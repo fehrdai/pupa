@@ -399,13 +399,42 @@ BLACK_PAUSE_HOLD = (1.5, 3.5)  # secondi di nero
 # concetto: piu' lento/morbido), "burst_len" scala il NUMERO di frame
 # (STROBE_BURST_COUNT), non un tempo - min 1 frame, mai una raffica da zero.
 # Numeri di partenza, da tarare dal vivo come tutto il resto in questo file.
+#
+# 2026-07-30 (operatore, durante un test dub techno dal vivo): "da 0 a 3 ci
+# deve essere una differenza marcata - nello stato piu' calmo abbandono
+# quasi totale dei cut, piu' tempo a monitor spenti/luci accese". 2 problemi
+# distinti, 2 fix:
+#   1. la progressione 0->3 era troppo timida (cut a 3 restava 0.15 - un
+#      90% base diventava comunque 13.5%, non "quasi mai") - numeri rifatti
+#      con una curva molto piu' ripida verso 3.
+#   2. calm_level non toccava PROPRIO l'alternanza monitor/luci - stava
+#      solo su cut/fade/nero/strobo, un asse a parte da MONITOR_SEQUENCE_BARS/
+#      MONITOR_BREATHER_PROBABILITY/_CHOICE_WEIGHTS che restano legate solo
+#      allo stato audio. 3 chiavi nuove, stesso overlay moltiplicativo:
+#      monitor_bars (allunga la durata di OGNI fase - ciclo A/B E i respiri
+#      both_on/both_off, non solo il primo), breather_prob (moltiplica la
+#      probabilita' di innescare un respiro a fine giro, cap 0.9 come il
+#      nero), breather_off_bias (sposta il peso della scelta verso
+#      "both_off" quando un respiro scatta - vedi _advance_monitor_sequence).
+#      LIGHT_SEQUENCE_BARS/LIGHT_BREATHER_* sono riferimenti diretti alle
+#      stesse tabelle monitor (vedi sotto) quindi l'effetto si propaga da
+#      solo alla sequenza indipendente delle luci in modalita' "alternate";
+#      in modalita' "inverse" (quella attiva oggi) "piu' tempo monitor
+#      spenti" e "piu' luci accese" sono gia' la STESSA cosa per costruzione
+#      (get_light_outputs deriva le luci dal monitor), quindi non serve
+#      nessun terzo asse dedicato alle luci.
 CALM_MULTIPLIERS = {
-    0: {"cut": 1.0,  "fade": 1.0, "black_prob": 1.0, "black_hold": 1.0, "burst_len": 1.0},
-    1: {"cut": 0.6,  "fade": 1.3, "black_prob": 1.5, "black_hold": 1.0, "burst_len": 0.75},
-    2: {"cut": 0.35, "fade": 1.6, "black_prob": 2.0, "black_hold": 1.5, "burst_len": 0.5},
-    3: {"cut": 0.15, "fade": 2.0, "black_prob": 2.5, "black_hold": 2.0, "burst_len": 0.25},
+    0: {"cut": 1.0,  "fade": 1.0, "black_prob": 1.0, "black_hold": 1.0, "burst_len": 1.0,
+        "monitor_bars": 1.0, "breather_prob": 1.0, "breather_off_bias": 0.0},
+    1: {"cut": 0.55, "fade": 1.25, "black_prob": 1.4, "black_hold": 1.2, "burst_len": 0.7,
+        "monitor_bars": 1.3, "breather_prob": 1.3, "breather_off_bias": 0.10},
+    2: {"cut": 0.25, "fade": 1.6, "black_prob": 2.0, "black_hold": 1.6, "burst_len": 0.4,
+        "monitor_bars": 1.8, "breather_prob": 1.6, "breather_off_bias": 0.25},
+    3: {"cut": 0.05, "fade": 2.2, "black_prob": 2.8, "black_hold": 2.2, "burst_len": 0.15,
+        "monitor_bars": 2.5, "breather_prob": 2.0, "breather_off_bias": 0.45},
 }
 CALM_BLACK_PAUSE_PROB_CAP = 0.9  # non deve mai diventare "quasi sempre nero"
+CALM_BREATHER_PROB_CAP = 0.9  # stesso principio, per il respiro monitor/luci
 
 # ALTERNANZA 2 USCITE MONITOR (setup hardware Linux: 2 uscite show separate,
 # vedi pupa.py/secrets_local.py - assente su Windows). A bassa energia
@@ -1134,6 +1163,9 @@ class HybridCouplesModel:
 
         bars_needed = MONITOR_BREATHER_BARS if self.monitor_seq_phase in ("both_on", "both_off") \
             else MONITOR_SEQUENCE_BARS.get(self.current_state, 2)
+        # CALM MODE (2026-07-30): ogni fase (A/B normale O un respiro) dura
+        # piu' a lungo quanto piu' alto e' calm_level - vedi CALM_MULTIPLIERS.
+        bars_needed = max(1, round(bars_needed * self._calm("monitor_bars")))
 
         if self.last_bpm > 0:
             current_bar = self.last_beat_count // BEATS_PER_BAR
@@ -1170,9 +1202,17 @@ class HybridCouplesModel:
         if self.monitor_seq_phase == "A":
             self.monitor_seq_phase = "B"
         elif self.monitor_seq_phase == "B":
-            prob = MONITOR_BREATHER_PROBABILITY.get(self.current_state, 0.0)
+            # CALM MODE (2026-07-30): il respiro scatta piu' spesso (breather_prob)
+            # e, quando scatta, e' spinto verso "both_off" (breather_off_bias) -
+            # vedi CALM_MULTIPLIERS. A calm_level=0 entrambi sono no-op (x1.0, +0.0),
+            # comportamento identico a prima.
+            prob = min(CALM_BREATHER_PROB_CAP,
+                       MONITOR_BREATHER_PROBABILITY.get(self.current_state, 0.0) * self._calm("breather_prob"))
             if random.random() < prob:
-                weights = MONITOR_BREATHER_CHOICE_WEIGHTS.get(self.current_state, {"both_off": 0.5, "both_on": 0.5})
+                base_weights = MONITOR_BREATHER_CHOICE_WEIGHTS.get(self.current_state, {"both_off": 0.5, "both_on": 0.5})
+                off_bias = self._calm("breather_off_bias")
+                off_w = min(0.95, max(0.05, base_weights.get("both_off", 0.5) + off_bias))
+                weights = {"both_off": off_w, "both_on": 1.0 - off_w}
                 self.monitor_seq_phase = random.choices(list(weights.keys()), weights=list(weights.values()), k=1)[0]
             else:
                 self.monitor_seq_phase = "A"
