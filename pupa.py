@@ -270,8 +270,12 @@ QLC_CHANNEL_F2_STROBE = 19
 # sostituito dal pilotaggio diretto di Master per-frame (vedi sotto). Gli id
 # restano documentati/assegnati in QLC+ per eventuale uso manuale.
 QLC_AMBIENT_SEND_INTERVAL_S = 0.1  # throttle del wash ambient (Step 2) - 10Hz basta per un respiro di AMBIENT_BREATH_PERIOD_S secondi
-QLC_LIGHT_ATTENUATED_SCALE = 0.15  # Step 3 (alternanza): il fixture non "in vista" resta attenuato invece di spegnersi del tutto - piu' naturale per delle luci che per un monitor
+QLC_LIGHT_ATTENUATED_SCALE = 0.0  # 2026-07-30: era 0.15 (pensato per "alternate" - il fixture non "in vista" attenuato invece di spento del tutto). Con "inverse" attiva ora, un 15% su colori saturi restava visibile ("perche' sono spesso accese entrambe le luci con un solo monitor acceso" - trovato dal vivo, zero {True,True} nei log del gate quindi la logica era corretta, il problema era qui) - lo spec dell'operatore per "inverse" dice esplicitamente "spento", non "attenuato". Rimettere a 0.15 se si torna ad "alternate".
 _qlc_last_logical_rgb = [(0, 0, 0)]  # ultimo RGB "logico" richiesto (pre-gate) - per ri-applicare subito quando il gate cambia (vedi loop principale), non solo al prossimo kick/tick ambient
+
+
+_qlc_last_combined_pct = [0.0]  # ultimo nero-schermo (combined_pct) conosciuto - aggiornato nel loop principale DOPO che e' calcolato; usato qui perche' questa funzione viene chiamata anche PRIMA di quel calcolo nello stesso tick (kick pulse, off-roll) - un valore di un tick fa (~50ms) e' trascurabile
+_qlc_last_wave_scene_showing = [False]  # come sopra, ma per l'enfasi colore_wave (2026-07-30)
 
 
 def _qlc_set_rgb_both(qlc, r, g, b, current_time):
@@ -284,7 +288,8 @@ def _qlc_set_rgb_both(qlc, r, g, b, current_time):
     con la modalita' 'inverse', legata ai cambi rapidi dei monitor, le luci
     sembrano 'in ritardo' - trovato dal vivo 2026-07-29)."""
     _qlc_last_logical_rgb[0] = (r, g, b)
-    gate = brain.get_light_outputs(current_time)
+    gate = brain.get_light_outputs(current_time, screen_blackness_pct=_qlc_last_combined_pct[0],
+                                    wave_scene_showing=_qlc_last_wave_scene_showing[0])
     scale_1 = 1.0 if gate["fixture1"] else QLC_LIGHT_ATTENUATED_SCALE
     scale_2 = 1.0 if gate["fixture2"] else QLC_LIGHT_ATTENUATED_SCALE
     qlc.set_channel(QLC_CHANNEL_F1_R, int(r * scale_1))
@@ -441,6 +446,11 @@ def main():
     }
     print(f"[PUPA] Slide riconosciute per contenuto: {slide_scenes}")
 
+    # Set delle scene _wave (2026-07-30, enfasi luci): la scena Program e'
+    # condivisa da entrambe le uscite monitor, quindi basta sapere SE quella
+    # corrente e' una _wave, non "quale lato" - vedi brain.get_light_outputs.
+    wave_scenes_set = set(scene_discovery.discover_wave_scenes(scenes))
+
     # Valida coppie/transizioni (ora comprensive di quanto scoperto sopra)
     # contro quello che esiste DAVVERO in questa installazione OBS - scene_B/
     # coppie/transizioni mancanti vengono tolte/sostituite invece di far
@@ -494,6 +504,7 @@ def main():
     qlc_ambient_last_send_time = [0.0]  # ultimo invio del wash ambient - throttle a tempo, vedi QLC_AMBIENT_SEND_INTERVAL_S
     qlc_ambient_active_last = [False]  # per loggare solo sui fronti ATTIVO/disattivato del wash ambient, non ad ogni tick
     qlc_light_gate_last = [{"fixture1": False, "fixture2": False}]  # ultimo gate alternanza APPLICATO - ri-applica subito il colore corrente quando cambia (non aspetta il prossimo kick/tick ambient)
+    qlc_strobe_rgb_last = [(-1, -1, -1)]  # ultimo RGB raffica strobo INVIATO - sentinella invalida per forzare il primo invio, edge-detected sui cambi successivi
 
     # CALM MODE: risolvi gli scene_item_id delle 4 source di controllo (vedi
     # CALM_LEVEL_SOURCES sopra), una volta sola all'avvio. Se la scena di
@@ -890,21 +901,6 @@ def main():
                     qlc.set_channel(QLC_CHANNEL_F2_MASTER, target_master)
                     qlc_master_strobe_last[0] = target_master
 
-                # GATE ALTERNANZA LUCI: controllato ad OGNI tick (non solo su
-                # kick/ambient) - se cambia (es. modalita' 'inverse', legata
-                # ai cambi rapidi dei monitor), ri-applica SUBITO l'ultimo
-                # colore "logico" richiesto invece di aspettare il prossimo
-                # evento kick/ambient, altrimenti le luci restano ferme al
-                # valore vecchio e sembrano "in ritardo" (trovato dal vivo
-                # 2026-07-29 testando 'inverse' - i monitor cambiavano molto
-                # piu' spesso di quanto i kick/il respiro ambient aggiornassero le luci).
-                light_gate_now = brain.get_light_outputs(current_time)
-                if light_gate_now != qlc_light_gate_last[0]:
-                    qlc_light_gate_last[0] = light_gate_now
-                    r, g, b = _qlc_last_logical_rgb[0]
-                    _qlc_set_rgb_both(qlc, r, g, b, current_time)
-                    debug_log(f"[QLC] gate cambiato -> {light_gate_now} (ri-applicato subito, rgb logico={r,g,b})")
-
                 # OVERLAY COLORE: al cambio identita' (rotazione coppia),
                 # decide il colore attivo e se il pulsare e' abilitato per
                 # questa coppia (COLOR_OVERLAY_OFF_PROBABILITY). Il pulsare
@@ -979,6 +975,27 @@ def main():
                         _qlc_set_rgb_both(qlc, int(r * ambient_intensity), int(g * ambient_intensity), int(b * ambient_intensity), current_time)
                         qlc_ambient_last_send_time[0] = current_time
 
+                # COLORE RAFFICA STROBO (QLC+, 2026-07-30): lo Step 1 pilota
+                # solo l'on/off (Master) - durante una VERA raffica strobo/
+                # lampo (non un CUT burst, che alterna scene di contenuto,
+                # non colori) l'RGB deve mostrare il colore scelto da
+                # _pick_strobe_color() (es. bianco), non restare quello
+                # dell'identita' corrente - "mancano le strobo bianche".
+                # Messo DOPO polso-a-kick/ambient apposta: durante un burst
+                # ha l'ultima parola e sovrascrive quello che quei blocchi
+                # avessero gia' mandato nello stesso tick (un burst nasce
+                # quasi sempre da un kick, che altrimenti vincerebbe).
+                # Edge-detected sul valore effettivo (colore*on/off), non ad
+                # ogni tick.
+                strobe_burst_color = brain.get_strobe_burst_color()
+                if strobe_burst_color is not None:
+                    strobe_rgb = identity_overlay_rgb.get(strobe_burst_color, (0, 0, 0))
+                    target_strobe_rgb = strobe_rgb if brain.is_strobe_frame_on() else (0, 0, 0)
+                    if target_strobe_rgb != qlc_strobe_rgb_last[0]:
+                        _qlc_set_rgb_both(qlc, *target_strobe_rgb, current_time)
+                        qlc_strobe_rgb_last[0] = target_strobe_rgb
+                        debug_log(f"[QLC] strobo colore -> {strobe_burst_color} rgb={target_strobe_rgb}")
+
                 # OVERLAY NERO: due sorgenti di polso sulla STESSA source
                 # condivisa - il respiro a BATTUTA (continuo, vedi
                 # BLACK_OVERLAY_* sopra) e il flash pre-drop (occasionale,
@@ -1029,6 +1046,40 @@ def main():
                 if combined_pct > 0 or black_overlay_last_sent[0] != 0.0:
                     obs.set_overlay_color(BLACK_OVERLAY_SOURCE, (0, 0, 0), combined_pct)
                     black_overlay_last_sent[0] = combined_pct
+                _qlc_last_combined_pct[0] = combined_pct
+
+                # GATE ALTERNANZA LUCI: controllato ad OGNI tick (non solo su
+                # kick/ambient) - se cambia, ri-applica SUBITO l'ultimo colore
+                # "logico" richiesto invece di aspettare il prossimo evento
+                # kick/ambient, altrimenti le luci restano ferme al valore
+                # vecchio e sembrano "in ritardo" (trovato dal vivo 2026-07-29
+                # testando 'inverse' - i monitor cambiavano molto piu' spesso
+                # di quanto i kick/il respiro ambient aggiornassero le luci).
+                # Spostato QUI (dopo combined_pct, non prima) perche' Step
+                # 'inverse' ora usa anche il nero unificato dello schermo
+                # (overlay a battito + flash pre-drop + pausa nera, non solo
+                # la fase grezza del sequencer monitor - trovato dal vivo
+                # 2026-07-30: "quando i 2 monitor fanno intermittenza sul
+                # nero le luci dovrebbero seguire, invece rimangono spente").
+                # ENFASI colore_wave (2026-07-30): se la scena Program
+                # corrente e' una _wave, il lato "acceso" del sequencer
+                # monitor riceve enfasi (luce accesa comunque) - vedi
+                # _get_light_outputs_inverse(). Tracciato anche qui (non solo
+                # passato alla chiamata sotto) perche' _qlc_set_rgb_both()
+                # internamente richiama get_light_outputs() da altri punti
+                # del tick (kick/off-roll) dove current_scene potrebbe non
+                # essere ancora quella "fresca" di questo giro - stesso
+                # motivo di _qlc_last_combined_pct sopra.
+                _qlc_last_wave_scene_showing[0] = current_scene in wave_scenes_set
+
+                light_gate_now = brain.get_light_outputs(current_time, screen_blackness_pct=combined_pct,
+                                                          wave_scene_showing=_qlc_last_wave_scene_showing[0])
+                if light_gate_now != qlc_light_gate_last[0]:
+                    qlc_light_gate_last[0] = light_gate_now
+                    r, g, b = _qlc_last_logical_rgb[0]
+                    _qlc_set_rgb_both(qlc, r, g, b, current_time)
+                    debug_log(f"[QLC] gate cambiato -> {light_gate_now} (combined_pct={combined_pct:.1f}, "
+                              f"wave={_qlc_last_wave_scene_showing[0]}, ri-applicato subito, rgb logico={r,g,b})")
 
                 # ALTERNANZA 2 USCITE MONITOR: porta in primo piano la
                 # finestra gia' aperta giusta per ciascuna uscita (stacking,
@@ -1158,32 +1209,59 @@ def main():
         traceback.print_exc()
     finally:
         print("[PUPA] Arresto pulito.")
-        # Spegne i fari fisici all'arresto (Ctrl+C/eccezione) - senza questo
-        # restano accesi/a meta' polso con l'ultimo valore inviato, dato che
-        # QLC+ non ha un default "torna a 0" da solo. Riconnette attivamente
-        # se il socket e' caduto (non solo "se gia' connesso") - trovato dal
-        # vivo 2026-07-29: un disconnect transitorio proprio nel momento
-        # dello stop faceva saltare lo spegnimento in silenzio.
-        if qlc.sock is None:
-            qlc.connect()
-        if qlc.sock is not None:
-            for ch in (QLC_CHANNEL_F1_MASTER, QLC_CHANNEL_F1_R, QLC_CHANNEL_F1_G, QLC_CHANNEL_F1_B, QLC_CHANNEL_F1_STROBE,
-                       QLC_CHANNEL_F2_MASTER, QLC_CHANNEL_F2_R, QLC_CHANNEL_F2_G, QLC_CHANNEL_F2_B, QLC_CHANNEL_F2_STROBE):
-                qlc.set_channel(ch, 0)
-            print("[QLC] Fari spenti.")
-        else:
-            print("[QLC] Impossibile spegnere i fari (QLC+ non raggiungibile).")
-        # Monitor a nero all'arresto (richiesta operatore: fermare PUPA deve
-        # fermare anche i software collegati - luci spente sopra, qui
-        # l'equivalente per OBS/i monitor) - Taglio, non serve una
-        # transizione morbida proprio mentre si sta chiudendo tutto.
-        try:
-            obs.switch_scene(brain.BLACK_PAUSE_SCENE, transition_ms=0, transition_type="Taglio")
+
+        def _shutdown_step(description, fn):
+            """Ogni step di arresto e' protetto A SE' - un secondo Ctrl+C per
+            l'impazienza durante la pulizia (es. mentre la chiamata di rete a
+            OBS e' in corso) non deve bloccare gli step successivi.
+            'except Exception' da solo NON basta: KeyboardInterrupt eredita
+            da BaseException, non da Exception, quindi un nuovo Ctrl+C durante
+            uno step sfuggirebbe e interromperebbe tutto il resto - trovato
+            dal vivo 2026-07-30 (OBS non passava a nero: il log si fermava a
+            meta' della chiamata di switch_scene, il resto del finally non
+            veniva mai raggiunto)."""
+            try:
+                fn()
+            except BaseException as e:
+                print(f"[PUPA] Step di arresto '{description}' interrotto/fallito: {e}")
+
+        def _spegni_luci():
+            # Senza questo i fari restano accesi/a meta' polso con l'ultimo
+            # valore inviato, dato che QLC+ non ha un default "torna a 0" da
+            # solo. Riconnette attivamente se il socket e' caduto (non solo
+            # "se gia' connesso") - trovato dal vivo 2026-07-29: un disconnect
+            # transitorio proprio nel momento dello stop faceva saltare lo
+            # spegnimento in silenzio.
+            if qlc.sock is None:
+                qlc.connect()
+            if qlc.sock is not None:
+                for ch in (QLC_CHANNEL_F1_MASTER, QLC_CHANNEL_F1_R, QLC_CHANNEL_F1_G, QLC_CHANNEL_F1_B, QLC_CHANNEL_F1_STROBE,
+                           QLC_CHANNEL_F2_MASTER, QLC_CHANNEL_F2_R, QLC_CHANNEL_F2_G, QLC_CHANNEL_F2_B, QLC_CHANNEL_F2_STROBE):
+                    qlc.set_channel(ch, 0)
+                print("[QLC] Fari spenti.")
+            else:
+                print("[QLC] Impossibile spegnere i fari (QLC+ non raggiungibile).")
+
+        def _obs_a_nero():
+            # Monitor a nero all'arresto (richiesta operatore: fermare PUPA
+            # deve fermare anche i software collegati). transition_ms=50 (non
+            # 1: OBS rifiuta SetCurrentSceneTransitionDuration sotto i 50ms,
+            # errore codice 402 - trovato dal vivo 2026-07-30 leggendo
+            # debug.log, non a intuito) - resta comunque quasi istantaneo.
+            obs.switch_scene(brain.BLACK_PAUSE_SCENE, transition_ms=50, transition_type="Taglio")
             print(f"[OBS] {brain.BLACK_PAUSE_SCENE} in programma.")
-        except Exception as e:
-            debug_log(f"[OBS] switch a {brain.BLACK_PAUSE_SCENE} fallito all'arresto: {e}")
-        audio.stop()
-        obs.disconnect()
+            # Margine prima di disconnettere: la richiesta WebSocket non
+            # blocca fino alla conferma di OBS (o comunque la disconnessione
+            # subito dopo puo' interromperla a meta') - senza pausa lo switch
+            # non arrivava mai a destinazione (ne' sul Program di OBS ne' sul
+            # proiettore), pur senza nessuna eccezione sollevata - trovato
+            # dal vivo 2026-07-30.
+            time.sleep(0.3)
+
+        _shutdown_step("spegni luci QLC+", _spegni_luci)
+        _shutdown_step("OBS a nero", _obs_a_nero)
+        _shutdown_step("stop audio", audio.stop)
+        _shutdown_step("disconnetti OBS", obs.disconnect)
 
 
 if __name__ == "__main__":

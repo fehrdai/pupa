@@ -497,6 +497,13 @@ LIGHT_BREATHER_PROBABILITY = MONITOR_BREATHER_PROBABILITY
 LIGHT_BREATHER_BARS = MONITOR_BREATHER_BARS
 LIGHT_BREATHER_CHOICE_WEIGHTS = MONITOR_BREATHER_CHOICE_WEIGHTS
 
+# 2026-07-30 (operatore, modalita' 'inverse'): soglia (percentuale, 0-100)
+# oltre la quale lo schermo e' considerato "abbastanza nero" da accendere
+# entrambi i fari - vedi _get_light_outputs_inverse(). Un valore basso
+# (non serve schermo TOTALMENTE nero) cattura anche l'inizio/fine del
+# respiro a battito, non solo il picco.
+LIGHT_INVERSE_BLACKNESS_THRESHOLD_PCT = 20
+
 # NOTA (2026-07-14): una pausa-respiro periodica era stata aggiunta qui per
 # ridurre la frequenza delle chiamate wmctrl, quando l'alternanza apriva e
 # chiudeva un proiettore nuovo ad ogni flip (fragile sotto carico, causa di
@@ -1209,17 +1216,25 @@ class HybridCouplesModel:
     #                    una futura LIGHT_MODE invece che come stato a parte -
     #                    l'operatore vuole provarla ma non ha ancora deciso se
     #                    sostituisce "alternate" o si aggiunge come 3a opzione.
-    def get_light_outputs(self, current_time):
+    def get_light_outputs(self, current_time, screen_blackness_pct=0.0, wave_scene_showing=False):
         """Dispatcher tra le 3 modalita' luci (vedi commento sopra) - non
         ancora un vero hotkey/LIGHT_MODE selezionabile, solo lo switch
         manuale usato per il test dal vivo del 2026-07-29. ATTIVA ORA:
         'inverse' (proposta dell'operatore, da provare dal vivo). 'alternate'
         (Step 3, comportamento precedente) resta sotto come metodo separato,
-        pronto per essere rimesso attivo cambiando questa riga."""
-        return self._get_light_outputs_inverse(current_time)
+        pronto per essere rimesso attivo cambiando questa riga.
+
+        screen_blackness_pct (0-100): quanto nero c'e' REALMENTE a schermo
+        in questo istante (overlay a battito + flash pre-drop + respiro
+        pausa nera - gia' unificati da pupa.py in un solo combined_pct,
+        vedi BLACK_OVERLAY_*/PRE_DROP_FLASH_*/get_black_pause_breath_phase).
+        wave_scene_showing: True se la scena Program corrente e' una _wave -
+        vedi _get_light_outputs_inverse per l'enfasi che abilita. Entrambi
+        passati solo a 'inverse' - le altre modalita' li ignorano."""
+        return self._get_light_outputs_inverse(current_time, screen_blackness_pct, wave_scene_showing)
         # return self._get_light_outputs_alternate(current_time)  # modalita' precedente (Step 3), non attiva ora
 
-    def _get_light_outputs_inverse(self, current_time):
+    def _get_light_outputs_inverse(self, current_time, screen_blackness_pct=0.0, wave_scene_showing=False):
         """Modalita' 'inverse': complementare PER POSIZIONE, non "tutto o
         niente" - fixture1 e' l'inverso di show1, fixture2 l'inverso di
         show2 (2026-07-29, corretto dopo il primo test dal vivo - la prima
@@ -1238,18 +1253,33 @@ class HybridCouplesModel:
         quando configurata) non e' attiva su questa macchina, dato che qui
         serve solo la FASE del sequencer, non lo switch fisico delle finestre.
 
-        TODO (non ancora implementato, richiesta operatore stessa sessione):
-        "sempre accese le luci in corrispondenza del colore_wave a monitor
-        corrispondente, come enfasi" - quando lo show corrispondente sta
-        mostrando la sua scena _wave (parte del ciclo wave_kick/identita'),
-        il faro corrispondente dovrebbe accendersi come accento ANCHE se la
-        regola inverse sopra direbbe spento. Serve che pupa.py comunichi a
-        brain.py quale scena e' visibile su quale lato (show1/show2) - oggi
-        get_monitor_outputs() non lo sa, l'informazione vive solo in
-        pupa.py (current_scene/monitor_show1_state ecc.). Da progettare la
-        prossima volta, non implementato per non indovinare il meccanismo."""
+        2026-07-30 (operatore): la fase A/B/both_on/both_off del sequencer
+        monitor e' TROPPO GROSSOLANA da sola - non cattura l'overlay nero a
+        battito ne' la pausa nera vera e propria durante le sovrapposizioni,
+        che sono i "nero" che l'operatore percepisce piu' spesso ("quando i
+        2 monitor fanno intermittenza sul nero le luci dovrebbero seguire").
+        Proposta operatore, confermata: unificare TUTTI e 3 i "neri" invece
+        di ascoltare solo il sequencer - se lo schermo e' visivamente scuro
+        ORA (screen_blackness_pct sopra soglia - gia' unifica overlay a
+        battito + flash pre-drop + respiro pausa nera, vedi pupa.py
+        combined_pct) ENTRAMBI i fari si accendono, a prescindere dalla fase
+        del sequencer monitor.
+
+        2026-07-30, ENFASI colore_wave (operatore, implementata): la scena
+        Program e' UNICA e condivisa (show1/show2 mostrano lo stesso
+        contenuto su 2 uscite fisiche diverse, si alterna solo QUALE delle 2
+        e' visibile, non il contenuto stesso) - quindi "il faro corrispondente
+        al monitor che mostra la sua scena _wave" si riduce a: se la scena
+        Program corrente e' una _wave (wave_scene_showing=True, passato da
+        pupa.py che conosce current_scene), il faro il cui lato e' "acceso"
+        si accende COMUNQUE come accento, anche se la regola inverse sopra
+        direbbe spento per quel lato."""
+        if screen_blackness_pct >= LIGHT_INVERSE_BLACKNESS_THRESHOLD_PCT:
+            return {"fixture1": True, "fixture2": True}
         monitor_state = self.get_monitor_outputs(current_time)
-        return {"fixture1": not monitor_state["show1"], "fixture2": not monitor_state["show2"]}
+        fixture1 = (not monitor_state["show1"]) or wave_scene_showing
+        fixture2 = (not monitor_state["show2"]) or wave_scene_showing
+        return {"fixture1": fixture1, "fixture2": fixture2}
 
     def _get_light_outputs_alternate(self, current_time):
         """Modalita' 'alternate' (Step 3 originale): stessa identica
@@ -2548,6 +2578,24 @@ def is_strobe_frame_on():
     attiva o durante il frame 'spento'."""
     return model.burst_active and (model.burst_step % 2 == 0)
 
+
+def get_strobe_burst_color():
+    """Nome della scena colore (in STROBE_COLOR_POOL - white/red/blue/green)
+    del burst strobo/lampo attivo ORA, o None se non c'e' nessun burst
+    attivo o se e' un CUT burst (alterna scene di contenuto reali, non
+    colori - vedi il controllo 'is_cut_burst' dentro _advance_burst).
+    Usato da pupa.py per pilotare l'RGB dei fari fisici in sync col Master
+    (Step 1) durante una vera raffica strobo/lampo - lo Step 1 gestiva solo
+    l'on/off di luminosita', non il COLORE del flash (es. bianco), che
+    restava quello dell'identita' corrente invece di quello scelto da
+    _pick_strobe_color() - trovato dal vivo 2026-07-30 ("mancano le strobo
+    bianche")."""
+    if not model.burst_active:
+        return None
+    if model.burst_alt_scene not in STROBE_COLOR_POOL:
+        return None
+    return model.burst_alt_scene
+
 def get_current_couple_a():
     """Scena_A su cui il modello crede di trovarsi ORA (randomizzata da
     initialize_model - vedi HybridCouplesModel.initialize). pupa.py la usa
@@ -2595,11 +2643,11 @@ def get_ambient_light(current_time):
     pulso a kick sui fari fisici durante questi stati (2026-07-29, Step 2)."""
     return model.get_ambient_light(current_time)
 
-def get_light_outputs(current_time):
+def get_light_outputs(current_time, screen_blackness_pct=0.0, wave_scene_showing=False):
     """Quale/i dei 2 fari fisici mostrare 'in vista' ora - vedi
     HybridCouplesModel.get_light_outputs. Chiamato da pupa.py ad ogni tick
     per attenuare il fixture non 'in vista' (2026-07-29, Step 3)."""
-    return model.get_light_outputs(current_time)
+    return model.get_light_outputs(current_time, screen_blackness_pct, wave_scene_showing)
 
 
 _UNIVERSAL_FALLBACK_TRANSITIONS = ["Cut", "Taglio", "Fade", "Dissolvenza"]

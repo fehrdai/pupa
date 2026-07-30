@@ -5,7 +5,7 @@ import logging
 from logging.handlers import RotatingFileHandler
 import os
 
-def setup_debug_logger(name="pupa_debug", log_file="debug.log", max_bytes=100000, backup_count=3):
+def setup_debug_logger(name="pupa_debug", log_file="debug.log", max_bytes=2000000, backup_count=6):
     """
     Setup logger che scrive su file con rotation automatica
 
@@ -13,8 +13,11 @@ def setup_debug_logger(name="pupa_debug", log_file="debug.log", max_bytes=100000
         name: nome logger
         log_file: file di output (nome, non percorso - finisce sempre in logs/,
             2026-07-17: prima scriveva nella root del progetto)
-        max_bytes: max dimensione file prima di rotate (100KB default)
-        backup_count: quanti file backup mantenere
+        max_bytes: max dimensione file prima di rotate (2MB default - 2026-07-30:
+            alzato da 100KB dopo che un test live di ~1h40 aveva perso oltre
+            i 3/4 dei log per rotation, coprendo solo gli ultimi ~28min)
+        backup_count: quanti file backup mantenere (6 default, era 3 - insieme
+            al nuovo max_bytes copre un'intera serata invece di ~25 minuti)
     """
     logger = logging.getLogger(name)
     logger.setLevel(logging.DEBUG)
