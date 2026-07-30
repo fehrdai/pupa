@@ -128,3 +128,15 @@ class BinaryControl:
             self._enabled_prev = enabled
             return enabled
         return None
+
+    def force(self, obs, value):
+        """Imposta ESPLICITAMENTE lo stato (OBS + tracker interno insieme) -
+        usato dai trigger 'one-shot' che si riarmano da soli dopo aver
+        reagito (es. un hotkey 'scarica X subito': Mostra fa scattare
+        l'azione, la richiudiamo subito noi cosi' la prossima pressione
+        produce un altro fronte pulito senza bisogno di un hotkey
+        'Nascondi' dedicato)."""
+        if self.item_id is None:
+            return
+        obs.set_scene_item_enabled(self.control_scene, self.item_id, value)
+        self._enabled_prev = value

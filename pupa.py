@@ -361,6 +361,26 @@ LOOP_SCENE_SOURCE = "PUPA_LOOP_SCENE"
 # Stessa scena di servizio, stesso schema di risoluzione/polling.
 BLACKOUT_SOURCE = "PUPA_BLACKOUT"
 
+# MODALITA' LUCI: hotkey OBS "Mostra"-only, 3 livelli esclusivi (stesso
+# schema di CALM_LEVEL_SOURCES: vince la source appena mostrata, autopulizia
+# delle altre) - seleziona brain.model.light_mode a runtime (2026-07-30).
+LIGHT_MODE_SOURCES = {0: "PUPA_LIGHTMODE_SYNC", 1: "PUPA_LIGHTMODE_ALTERNATE", 2: "PUPA_LIGHTMODE_INVERSE"}
+LIGHT_MODE_NAMES = {0: "sync", 1: "alternate", 2: "inverse"}
+
+# OVERRIDE MANUALE MONITOR/LUCI: 2 hotkey binari indipendenti (F9/F10),
+# ciascuno un toggle persistente come BLACKOUT - non un 3-way esclusivo,
+# per scelta esplicita dell'operatore. Se entrambi risultassero attivi
+# insieme (non dovrebbe succedere in uso normale), SOLO_MONITOR vince per
+# precedenza fissa nel codice, vedi il blocco di dispatch sotto.
+SOLO_MONITOR_SOURCE = "PUPA_SOLO_MONITOR"  # F9: monitor SEMPRE accesi, luci spente
+SOLO_LUCI_SOURCE = "PUPA_SOLO_LUCI"  # F10: luci SEMPRE accese, monitor spenti
+
+# STROBO BIANCO MANUALE: hotkey F8, "scarica" una raffica bianca subito,
+# bypassando STROBE_BURST_PROBABILITY - one-shot che si riarma da solo
+# (vedi hotkey_controller.BinaryControl.force), quindi basta legare "Mostra"
+# in OBS, nessun "Nascondi" necessario.
+STROBE_WHITE_SOURCE = "PUPA_STROBE_WHITE"
+
 # ============================================================================
 # SCALE-TO-SOUND — DISATTIVATO DI NUOVO (2026-07-06)
 # ============================================================================
@@ -542,6 +562,19 @@ def main():
     blackout_control = BinaryControl("Blackout", CALM_CONTROL_SCENE, BLACKOUT_SOURCE)
     blackout_control.resolve(obs, scenes)
     blackout_active = [False]  # stato corrente, letto anche fuori dal blocco di poll (gate luci/monitor)
+
+    light_mode_control = MultiLevelControl("Modalita luci", CALM_CONTROL_SCENE, LIGHT_MODE_SOURCES)
+    light_mode_control.resolve(obs, scenes)
+
+    solo_monitor_control = BinaryControl("Solo monitor", CALM_CONTROL_SCENE, SOLO_MONITOR_SOURCE)
+    solo_monitor_control.resolve(obs, scenes)
+    solo_luci_control = BinaryControl("Solo luci", CALM_CONTROL_SCENE, SOLO_LUCI_SOURCE)
+    solo_luci_control.resolve(obs, scenes)
+    solo_monitor_active = [False]
+    solo_luci_active = [False]
+
+    strobe_white_control = BinaryControl("Strobo bianco manuale", CALM_CONTROL_SCENE, STROBE_WHITE_SOURCE)
+    strobe_white_control.resolve(obs, scenes)
 
     # ALTERNANZA 2 USCITE MONITOR: attiva solo se configurata in
     # secrets_local.py. window_manager.get_window_manager() sceglie
@@ -730,7 +763,9 @@ def main():
             # CALM_POLL_EVERY_N_TICKS) - il meccanismo (edge-detection,
             # "vince la source appena accesa", autopulizia) e' in
             # hotkey_controller.py, qui resta solo la dispatch semantica.
-            if calm_control.active or loop_scene_control.active or blackout_control.active:
+            if (calm_control.active or loop_scene_control.active or blackout_control.active
+                    or light_mode_control.active or solo_monitor_control.active
+                    or solo_luci_control.active or strobe_white_control.active):
                 calm_poll_tick += 1
                 if calm_poll_tick >= CALM_POLL_EVERY_N_TICKS:
                     calm_poll_tick = 0
@@ -768,6 +803,50 @@ def main():
                         else:
                             print("[BLACKOUT] disattivato - ripristino normale dal prossimo tick")
                             debug_log("[BLACKOUT] disattivato")
+
+                    # MODALITA' LUCI (F5/F6/F7): stesso schema esclusivo di CALM MODE.
+                    new_light_mode_level = light_mode_control.poll(obs)
+                    if new_light_mode_level is not None:
+                        mode_name = LIGHT_MODE_NAMES.get(new_light_mode_level, "inverse")
+                        brain.set_light_mode(mode_name)
+                        print(f"[MODALITA LUCI] -> {mode_name}")
+                        debug_log(f"[MODALITA LUCI] -> {mode_name}")
+
+                    # SOLO MONITOR / SOLO LUCI (F9/F10): 2 toggle indipendenti,
+                    # ricomposti in un unico brain.forced_mode con SOLO_MONITOR
+                    # a vincere per precedenza fissa se risultassero attivi
+                    # entrambi insieme (non dovrebbe succedere in uso normale).
+                    forced_mode_changed = False
+                    new_solo_monitor = solo_monitor_control.poll(obs)
+                    if new_solo_monitor is not None:
+                        solo_monitor_active[0] = new_solo_monitor
+                        forced_mode_changed = True
+                    new_solo_luci = solo_luci_control.poll(obs)
+                    if new_solo_luci is not None:
+                        solo_luci_active[0] = new_solo_luci
+                        forced_mode_changed = True
+                    if forced_mode_changed:
+                        if solo_monitor_active[0]:
+                            forced_mode = "solo_monitor"
+                        elif solo_luci_active[0]:
+                            forced_mode = "solo_luci"
+                        else:
+                            forced_mode = None
+                        brain.set_forced_mode(forced_mode)
+                        print(f"[OVERRIDE MANUALE] -> {forced_mode}")
+                        debug_log(f"[OVERRIDE MANUALE] -> {forced_mode}")
+
+                    # STROBO BIANCO MANUALE (F8): one-shot, si riarma da solo
+                    # (force(False) subito dopo) - niente effetto durante il
+                    # blackout, dato che decide_next_scene() non gira in quel
+                    # momento (vedi guard "not blackout_active[0]" sotto) e la
+                    # raffica resterebbe innescata ma congelata a meta'.
+                    new_strobe_trigger = strobe_white_control.poll(obs)
+                    if new_strobe_trigger and not blackout_active[0]:
+                        brain.trigger_white_strobe(current_scene)
+                        strobe_white_control.force(obs, False)
+                        print("[STROBO MANUALE] raffica bianca innescata")
+                        debug_log("[STROBO MANUALE] raffica bianca innescata")
 
             audio_data = audio.get_metrics()
 

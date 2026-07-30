@@ -810,6 +810,8 @@ class HybridCouplesModel:
         self.last_beat_count = 0
         self.calm_level = 0  # 0-3, impostato dall'hotkey OBS (vedi CALM_MULTIPLIERS e set_calm_level)
         self.loop_scene = False  # hotkey OBS: congela il timer 4min sulla scena_A corrente (vedi set_loop_scene)
+        self.light_mode = "inverse"  # "sync"/"alternate"/"inverse" - hotkey F5/F6/F7, vedi set_light_mode/get_light_outputs
+        self.forced_mode = None  # None/"solo_monitor"/"solo_luci" - override manuale hotkey F9/F10, vince su light_mode/calm/stato (vedi set_forced_mode)
 
         # FLASH NERO PRE-DROP (vedi RUNUP_* e _detect_runup)
         self.runup_flash_active = False  # gia' scattato per QUESTA risalita, in attesa che si risolva prima di poter riscattare
@@ -1158,6 +1160,14 @@ class HybridCouplesModel:
         ancora stimato.
 
         Ritorna {"show1": bool, "show2": bool}."""
+        # OVERRIDE MANUALE (hotkey F9/F10, vedi set_forced_mode) - vince su
+        # tutto il resto, incluso DROP/PEAK: e' una scelta esplicita
+        # dell'operatore, non un accento automatico.
+        if self.forced_mode == "solo_monitor":
+            return {"show1": True, "show2": True}
+        if self.forced_mode == "solo_luci":
+            return {"show1": False, "show2": False}
+
         if self.current_state in MONITOR_BOTH_ON_STATES:
             return {"show1": True, "show2": True}
 
@@ -1234,35 +1244,29 @@ class HybridCouplesModel:
         return breath * (AMBIENT_PEAK_PCT / 100.0)
 
     # MODALITA' LUCI (2026-07-29, operatore) - 3 modalita' di funzionamento
-    # per il rapporto fari/monitor, pensate come selezionabili a runtime via
-    # hotkey OBS (stesso meccanismo di set_calm_level/set_loop_scene) - non
-    # ancora cablate a nessun hotkey, solo scaffold/commento per ora, come
-    # richiesto esplicitamente ("mantieni le 3 opzioni solo commentandole").
-    # Quella ATTIVA oggi e' "alternate" (get_light_outputs sotto).
+    # per il rapporto fari/monitor. Selezionabili a runtime via hotkey F5/F6/F7
+    # dal 2026-07-30 (self.light_mode, vedi set_light_mode/get_light_outputs) -
+    # prima erano solo scaffold/commento su richiesta esplicita dell'operatore
+    # ("mantieni le 3 opzioni solo commentandole per ora"). Default "inverse".
     #   1. "sync"      - i 2 fari mostrano sempre lo stesso colore
     #                    contemporaneamente, nessuna alternanza - il
     #                    comportamento originale pre-Step 3 (_qlc_set_rgb_both
     #                    manda RGB pieno a entrambi, senza gate).
-    #   2. "alternate" - alternanza A/B indipendente dai monitor (Step 3,
-    #                    ATTIVA oggi): get_light_outputs()/_advance_light_sequence()
+    #   2. "alternate" - alternanza A/B indipendente dai monitor (Step 3):
+    #                    get_light_outputs()/_advance_light_sequence()
     #                    sotto, stato proprio (light_seq_phase).
     #   3. "inverse"   - complementare ai monitor (proposta operatore
     #                    2026-07-29, collegata alla visione "luci/video
-    #                    complementari" di una sessione precedente): fari
-    #                    accesi SOLO quando i monitor sono nella fase
-    #                    both_off (get_monitor_outputs() -> entrambi False),
-    #                    spenti mentre il video e' visibile. Da implementare
-    #                    come branch alternativo qui dentro, selezionato da
-    #                    una futura LIGHT_MODE invece che come stato a parte -
-    #                    l'operatore vuole provarla ma non ha ancora deciso se
-    #                    sostituisce "alternate" o si aggiunge come 3a opzione.
+    #                    complementari" di una sessione precedente, DEFAULT):
+    #                    fari accesi quando i monitor sono spenti (per
+    #                    posizione), con enfasi sulle scene _wave e override
+    #                    quando lo schermo e' davvero nero - vedi
+    #                    _get_light_outputs_inverse.
     def get_light_outputs(self, current_time, screen_blackness_pct=0.0, wave_scene_showing=False):
-        """Dispatcher tra le 3 modalita' luci (vedi commento sopra) - non
-        ancora un vero hotkey/LIGHT_MODE selezionabile, solo lo switch
-        manuale usato per il test dal vivo del 2026-07-29. ATTIVA ORA:
-        'inverse' (proposta dell'operatore, da provare dal vivo). 'alternate'
-        (Step 3, comportamento precedente) resta sotto come metodo separato,
-        pronto per essere rimesso attivo cambiando questa riga.
+        """Dispatcher tra le 3 modalita' luci (vedi commento sopra), ora
+        selezionabile a runtime via hotkey F5/F6/F7 (self.light_mode, vedi
+        set_light_mode) - 2026-07-30. Default 'inverse' (era gia' quella
+        attiva prima dell'hotkey).
 
         screen_blackness_pct (0-100): quanto nero c'e' REALMENTE a schermo
         in questo istante (overlay a battito + flash pre-drop + respiro
@@ -1271,8 +1275,24 @@ class HybridCouplesModel:
         wave_scene_showing: True se la scena Program corrente e' una _wave -
         vedi _get_light_outputs_inverse per l'enfasi che abilita. Entrambi
         passati solo a 'inverse' - le altre modalita' li ignorano."""
+        # OVERRIDE MANUALE (hotkey F9/F10) - vince su light_mode, stessa
+        # priorita' assoluta di get_monitor_outputs() sopra.
+        if self.forced_mode == "solo_monitor":
+            return {"fixture1": False, "fixture2": False}
+        if self.forced_mode == "solo_luci":
+            return {"fixture1": True, "fixture2": True}
+
+        if self.light_mode == "sync":
+            return self._get_light_outputs_sync()
+        if self.light_mode == "alternate":
+            return self._get_light_outputs_alternate(current_time)
         return self._get_light_outputs_inverse(current_time, screen_blackness_pct, wave_scene_showing)
-        # return self._get_light_outputs_alternate(current_time)  # modalita' precedente (Step 3), non attiva ora
+
+    def _get_light_outputs_sync(self):
+        """Modalita' 'sync': i 2 fari mostrano sempre lo stesso colore
+        insieme, nessuna alternanza - comportamento pre-Step3 (_qlc_set_rgb_both
+        manda RGB pieno a entrambi, senza gate)."""
+        return {"fixture1": True, "fixture2": True}
 
     def _get_light_outputs_inverse(self, current_time, screen_blackness_pct=0.0, wave_scene_showing=False):
         """Modalita' 'inverse': complementare PER POSIZIONE, non "tutto o
@@ -1469,6 +1489,21 @@ class HybridCouplesModel:
             logger=logger
         )
         return target
+
+    def trigger_white_strobe(self, current_scene):
+        """Innesca SUBITO una raffica strobo bianca (hotkey F8, 'scarica
+        strobo bianco') - bypassa STROBE_BURST_PROBABILITY, un accento a
+        comando invece che casuale. Stessa macchina a stati/scaling calm
+        del burst automatico (vedi decide_next_scene), solo alt_scene
+        forzato a 'white_color' invece del pool/colore identitario. Non
+        chiama _advance_burst() qui - basta impostare burst_active=True,
+        il prossimo decide_next_scene() (gia' chiamato ad ogni tick da
+        pupa.py) lo rileva e avanza la raffica frame per frame da solo,
+        esattamente come un burst innescato automaticamente."""
+        calm_burst_count = max(1, round(STROBE_BURST_COUNT * self._calm("burst_len")))
+        self._trigger_strobe(current_scene, calm_burst_count * 2,
+                              alt_scene="white_color",
+                              interval=self._get_strobe_interval() * self._calm("fade"))
 
     def _maybe_trigger_overlap(self, peek_target_scene, current_time, current_scene, logger, probability=None):
         """Prova ad innescare una SOVRAPPOSIZIONE invece di uno switch normale.
@@ -2669,6 +2704,31 @@ def set_loop_scene(enabled, current_time):
 def get_loop_scene():
     """True se il loop sulla scena_A corrente e' attivo."""
     return model.loop_scene
+
+def set_light_mode(mode):
+    """Imposta la modalita' luci ('sync'/'alternate'/'inverse', vedi
+    get_light_outputs) - hotkey OBS F5/F6/F7. Un valore non valido viene
+    ignorato (resta quella corrente) invece di rompere il dispatcher."""
+    if mode in ("sync", "alternate", "inverse"):
+        model.light_mode = mode
+
+def get_light_mode():
+    """Modalita' luci corrente (per il print console di pupa.py)."""
+    return model.light_mode
+
+def set_forced_mode(mode):
+    """Override manuale monitor/luci (None/'solo_monitor'/'solo_luci') -
+    hotkey OBS F9/F10, vince su tutto il resto (vedi get_monitor_outputs/
+    get_light_outputs). Un valore non valido diventa None (nessun override)."""
+    model.forced_mode = mode if mode in ("solo_monitor", "solo_luci") else None
+
+def get_forced_mode():
+    """Override manuale corrente (per il print console di pupa.py)."""
+    return model.forced_mode
+
+def trigger_white_strobe(current_scene):
+    """Innesca subito una raffica strobo bianca - hotkey OBS F8."""
+    model.trigger_white_strobe(current_scene)
 
 def get_monitor_outputs(current_time):
     """Quale/i delle 2 uscite show mostrare accesa - vedi
