@@ -1266,6 +1266,26 @@ def main():
                 print(f"[OBS] ATTENZIONE: switch a nero NON confermato - scena reale rimasta '{actual_scene}'")
                 debug_log(f"[OBS] switch a nero NON confermato dopo retry - scena reale='{actual_scene}'")
 
+            # 2026-07-30 (stesso giorno, dopo la conferma via get_current_scene
+            # sopra): l'operatore ha visto lo switch "confermato" nel log ma
+            # il monitor fisico non e' andato a nero comunque - root cause
+            # reale: sull'alternanza monitor a stacking (vedi window_manager.py)
+            # ogni uscita ha 2 Proiettori GIA' APERTI sovrapposti (uno segue
+            # il Programma, l'altro e' bloccato in permanenza su MONITOR_BLACK_
+            # SCENE) - switchare il Programma cambia solo cosa mostra la
+            # finestra "on", ma se al momento dello stop era in primo piano
+            # quella finestra e non si ridisegna in tempo (o resta davanti per
+            # qualunque motivo), il monitor fisico resta sull'ultimo frame
+            # invece di andare a nero, indipendentemente da quanto sopra sia
+            # davvero riuscito. Fix: forza ESPLICITAMENTE in primo piano la
+            # finestra "off" (gia' bloccata su nero, stesso meccanismo gia'
+            # usato per il resto dello show) per ENTRAMBE le uscite, invece di
+            # fidarsi che la finestra giusta sia gia' quella davanti.
+            if monitor_show1_off_id is not None:
+                window_manager.activate(monitor_show1_off_id)
+            if monitor_show2_off_id is not None:
+                window_manager.activate(monitor_show2_off_id)
+
         _shutdown_step("spegni luci QLC+", _spegni_luci)
         _shutdown_step("OBS a nero", _obs_a_nero)
         _shutdown_step("stop audio", audio.stop)

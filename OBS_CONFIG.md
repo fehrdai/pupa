@@ -56,7 +56,7 @@ PUPA has no native "hotkey" concept over the WebSocket API — the trick (see `h
 |---|---|---|
 | `PUPA_CALM_0`..`PUPA_CALM_3` | 4-way exclusive | "Mostra"-only hotkeys — the **most recently shown** wins (not the highest level), autopulizia hides the rest. See `brain.CALM_MULTIPLIERS`. |
 | `PUPA_LOOP_SCENE` | binary toggle | Freezes the current scene_A's 4min timer. |
-| `PUPA_BLACKOUT` (2026-07-30) | binary toggle | Forces monitors to `black_color` and all QLC+ channels to 0 **without stopping PUPA** — internal timers/energy-tracking freeze in place and resume exactly where they left off on toggle-off, no explicit "resume" logic. For technical pauses/mic announcements. |
+| `PUPA_BLACKOUT` (2026-07-30, bound to **F11**) | binary toggle | Forces monitors to `black_color` and all QLC+ channels to 0 **without stopping PUPA** — internal timers/energy-tracking freeze in place and resume exactly where they left off on toggle-off, no explicit "resume" logic. For technical pauses/mic announcements. |
 
 Not yet built: a runtime selector for `brain.get_light_outputs()`'s 3 modes (`sync`/`alternate`/`inverse`) — same mechanism, deferred.
 
