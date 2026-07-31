@@ -279,6 +279,8 @@ _qlc_last_logical_rgb = [(0, 0, 0)]  # ultimo RGB "logico" richiesto (pre-gate) 
 
 _qlc_last_combined_pct = [0.0]  # ultimo nero-schermo (combined_pct) conosciuto - aggiornato nel loop principale DOPO che e' calcolato; usato qui perche' questa funzione viene chiamata anche PRIMA di quel calcolo nello stesso tick (kick pulse, off-roll) - un valore di un tick fa (~50ms) e' trascurabile
 _qlc_last_wave_scene_showing = [False]  # come sopra, ma per l'enfasi colore_wave (2026-07-30)
+_qlc_last_identity_rgb_raw = [(0, 0, 0)]  # colore raw dell'identita' corrente (non decaduto dal polso a kick) - vedi WAVE_EMPHASIS_MIN_PCT sotto
+WAVE_EMPHASIS_MIN_PCT = 30  # 2026-08-01: l'enfasi wave forzava solo il gate ON/OFF, non un colore minimo - se il polso a kick era decaduto a (0,0,0) proprio mentre una scena _wave era in Program, il faro risultava "acceso" (gate True) ma nero, indistinguibile da spento (43% dei casi wave=True nel log del test dal vivo). Ora l'enfasi garantisce ALMENO questa percentuale del colore raw dell'identita', invece di ereditare qualunque valore il decadimento kick abbia lasciato.
 
 
 def _qlc_set_rgb_both(qlc, r, g, b, current_time):
@@ -289,7 +291,19 @@ def _qlc_set_rgb_both(qlc, r, g, b, current_time):
     il loop principale lo riusa per ri-applicare immediatamente il gate
     quando cambia, senza aspettare il prossimo kick/tick ambient (altrimenti
     con la modalita' 'inverse', legata ai cambi rapidi dei monitor, le luci
-    sembrano 'in ritardo' - trovato dal vivo 2026-07-29)."""
+    sembrano 'in ritardo' - trovato dal vivo 2026-07-29).
+
+    Durante l'enfasi wave (_qlc_last_wave_scene_showing), applica anche un
+    minimo di luminosita' (WAVE_EMPHASIS_MIN_PCT del colore raw
+    dell'identita') se il colore richiesto e' piu' debole di quello - senza
+    questo l'enfasi era "acceso ma nero" ogni volta che il polso a kick era
+    gia' decaduto (trovato dal vivo 2026-08-01)."""
+    if _qlc_last_wave_scene_showing[0]:
+        ir, ig, ib = _qlc_last_identity_rgb_raw[0]
+        floor_r = int(ir * WAVE_EMPHASIS_MIN_PCT / 100)
+        floor_g = int(ig * WAVE_EMPHASIS_MIN_PCT / 100)
+        floor_b = int(ib * WAVE_EMPHASIS_MIN_PCT / 100)
+        r, g, b = max(r, floor_r), max(g, floor_g), max(b, floor_b)
     _qlc_last_logical_rgb[0] = (r, g, b)
     gate = brain.get_light_outputs(current_time, screen_blackness_pct=_qlc_last_combined_pct[0],
                                     wave_scene_showing=_qlc_last_wave_scene_showing[0])
@@ -1050,6 +1064,7 @@ def main():
                     # l'intera durata della coppia (bug reale osservato dal
                     # vivo 2026-07-29 - vedi PUPA_DEVELOPMENT_LOG.md).
                     identity_rgb_raw[0] = rgb
+                    _qlc_last_identity_rgb_raw[0] = rgb or (0, 0, 0)
                     if rgb and random.random() >= COLOR_OVERLAY_OFF_PROBABILITY:
                         overlay_rgb[0] = rgb
                         overlay_peak_pct[0] = COLOR_OVERLAY_PEAK_PCT_OVERRIDES.get(identity_color, COLOR_OVERLAY_PEAK_PCT)
