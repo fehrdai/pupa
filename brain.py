@@ -217,7 +217,7 @@ def discover_and_merge_config(available_scenes, all_inputs, scene_item_names, pa
                 identity_sets.append(entry)
             raw["identity_sets"] = identity_sets
             changed = True
-        debug_log(f"[DISCOVERY] identity_sets scoperti: {identity_sets}")
+            debug_log(f"[DISCOVERY] identity_sets scoperti: {identity_sets}")
 
     if not sd.has_black_color(color_scenes):
         print(f"[PUPA] ATTENZIONE: nessuna scena '{sd.BLACK_COLOR_SCENE}' trovata in OBS - "
