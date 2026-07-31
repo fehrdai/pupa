@@ -1490,21 +1490,6 @@ class HybridCouplesModel:
         )
         return target
 
-    def trigger_white_strobe(self, current_scene):
-        """Innesca SUBITO una raffica strobo bianca (hotkey F8, 'scarica
-        strobo bianco') - bypassa STROBE_BURST_PROBABILITY, un accento a
-        comando invece che casuale. Stessa macchina a stati/scaling calm
-        del burst automatico (vedi decide_next_scene), solo alt_scene
-        forzato a 'white_color' invece del pool/colore identitario. Non
-        chiama _advance_burst() qui - basta impostare burst_active=True,
-        il prossimo decide_next_scene() (gia' chiamato ad ogni tick da
-        pupa.py) lo rileva e avanza la raffica frame per frame da solo,
-        esattamente come un burst innescato automaticamente."""
-        calm_burst_count = max(1, round(STROBE_BURST_COUNT * self._calm("burst_len")))
-        self._trigger_strobe(current_scene, calm_burst_count * 2,
-                              alt_scene="white_color",
-                              interval=self._get_strobe_interval() * self._calm("fade"))
-
     def _maybe_trigger_overlap(self, peek_target_scene, current_time, current_scene, logger, probability=None):
         """Prova ad innescare una SOVRAPPOSIZIONE invece di uno switch normale.
 
@@ -2725,10 +2710,6 @@ def set_forced_mode(mode):
 def get_forced_mode():
     """Override manuale corrente (per il print console di pupa.py)."""
     return model.forced_mode
-
-def trigger_white_strobe(current_scene):
-    """Innesca subito una raffica strobo bianca - hotkey OBS F8."""
-    model.trigger_white_strobe(current_scene)
 
 def get_monitor_outputs(current_time):
     """Quale/i delle 2 uscite show mostrare accesa - vedi

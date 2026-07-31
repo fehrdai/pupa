@@ -375,11 +375,23 @@ LIGHT_MODE_NAMES = {0: "sync", 1: "alternate", 2: "inverse"}
 SOLO_MONITOR_SOURCE = "PUPA_SOLO_MONITOR"  # F9: monitor SEMPRE accesi, luci spente
 SOLO_LUCI_SOURCE = "PUPA_SOLO_LUCI"  # F10: luci SEMPRE accese, monitor spenti
 
-# STROBO BIANCO MANUALE: hotkey F8, "scarica" una raffica bianca subito,
-# bypassando STROBE_BURST_PROBABILITY - one-shot che si riarma da solo
-# (vedi hotkey_controller.BinaryControl.force), quindi basta legare "Mostra"
-# in OBS, nessun "Nascondi" necessario.
+# STROBO BIANCO MANUALE: hotkey F8, toggle persistente (2026-08-01, era un
+# burst a durata fissa - operatore l'ha chiesto come vero accendi/spegni) -
+# finche' attivo lampeggia bianco su entrambi i fari ad ogni tick, ignorando
+# gate/colore normali; Nascondi lo ferma e la luce normale riprende dal
+# tick successivo.
 STROBE_WHITE_SOURCE = "PUPA_STROBE_WHITE"
+STROBE_WHITE_BLINK_INTERVAL_S = 0.1  # mezzo periodo del lampeggio (on 0.1s, off 0.1s)
+
+# SHUTDOWN (F12, 2026-08-01): hotkey per fermare PUPA senza bisogno del
+# terminale - operatore dal vivo ha trovato che la finestra del terminale
+# finisce sempre in secondo piano dietro i Proiettori dell'alternanza
+# monitor, rendendo Ctrl+C irraggiungibile senza spostare fisicamente le
+# finestre. "Mostra" solleva SystemExit dal loop principale - eredita da
+# BaseException quindi il blocco finally (stessa cascata di spegnimento di
+# un Ctrl+C: luci spente, OBS a nero, disconnessione) parte identico,
+# nessuna duplicazione di logica.
+SHUTDOWN_SOURCE = "PUPA_SHUTDOWN"
 
 # ============================================================================
 # SCALE-TO-SOUND — DISATTIVATO DI NUOVO (2026-07-06)
@@ -575,6 +587,12 @@ def main():
 
     strobe_white_control = BinaryControl("Strobo bianco manuale", CALM_CONTROL_SCENE, STROBE_WHITE_SOURCE)
     strobe_white_control.resolve(obs, scenes)
+    strobe_white_active = [False]
+    strobe_white_last_blink_time = [0.0]
+    strobe_white_last_sent = [None]  # ultimo valore Master*100+colore inviato, edge-detected
+
+    shutdown_control = BinaryControl("Shutdown", CALM_CONTROL_SCENE, SHUTDOWN_SOURCE)
+    shutdown_control.resolve(obs, scenes)
 
     # ALTERNANZA 2 USCITE MONITOR: attiva solo se configurata in
     # secrets_local.py. window_manager.get_window_manager() sceglie
@@ -765,7 +783,8 @@ def main():
             # hotkey_controller.py, qui resta solo la dispatch semantica.
             if (calm_control.active or loop_scene_control.active or blackout_control.active
                     or light_mode_control.active or solo_monitor_control.active
-                    or solo_luci_control.active or strobe_white_control.active):
+                    or solo_luci_control.active or strobe_white_control.active
+                    or shutdown_control.active):
                 calm_poll_tick += 1
                 if calm_poll_tick >= CALM_POLL_EVERY_N_TICKS:
                     calm_poll_tick = 0
@@ -809,6 +828,13 @@ def main():
                     if new_light_mode_level is not None:
                         mode_name = LIGHT_MODE_NAMES.get(new_light_mode_level, "inverse")
                         brain.set_light_mode(mode_name)
+                        # Forza un resync (vedi commento identico sotto per
+                        # F9/F10 e sul toggle F8) - senza questo, se il nuovo
+                        # gate coincide per caso col precedente (es. entrambi
+                        # gia' {True,True}), niente si ri-applica finche' non
+                        # cambia da solo al prossimo kick/ambient - "ritardo"
+                        # osservato dal vivo 2026-08-01 su F10.
+                        qlc_light_gate_last[0] = {"fixture1": None, "fixture2": None}
                         print(f"[MODALITA LUCI] -> {mode_name}")
                         debug_log(f"[MODALITA LUCI] -> {mode_name}")
 
@@ -833,20 +859,48 @@ def main():
                         else:
                             forced_mode = None
                         brain.set_forced_mode(forced_mode)
+                        # Stesso fix del "ritardo" F10: None non combacia mai
+                        # con un valore vero, forza il ri-applica al prossimo
+                        # tick invece di aspettare un cambio naturale del gate.
+                        qlc_light_gate_last[0] = {"fixture1": None, "fixture2": None}
                         print(f"[OVERRIDE MANUALE] -> {forced_mode}")
                         debug_log(f"[OVERRIDE MANUALE] -> {forced_mode}")
 
-                    # STROBO BIANCO MANUALE (F8): one-shot, si riarma da solo
-                    # (force(False) subito dopo) - niente effetto durante il
-                    # blackout, dato che decide_next_scene() non gira in quel
-                    # momento (vedi guard "not blackout_active[0]" sotto) e la
-                    # raffica resterebbe innescata ma congelata a meta'.
-                    new_strobe_trigger = strobe_white_control.poll(obs)
-                    if new_strobe_trigger and not blackout_active[0]:
-                        brain.trigger_white_strobe(current_scene)
-                        strobe_white_control.force(obs, False)
-                        print("[STROBO MANUALE] raffica bianca innescata")
-                        debug_log("[STROBO MANUALE] raffica bianca innescata")
+                    # STROBO BIANCO MANUALE (F8): toggle persistente (non piu'
+                    # un burst a durata fissa - operatore 2026-08-01: "la
+                    # intendevo piu' come accendi/spegni piuttosto che a
+                    # durata"). Mostra = comincia a lampeggiare bianco su
+                    # entrambi i fari, ad ogni tick, finche' non ripremi;
+                    # Nascondi = si ferma e la luce normale (gate/colore)
+                    # riprende dal prossimo tick. Vedi il blocco dedicato
+                    # sotto (fuori da "if audio_data") per il lampeggio vero
+                    # e proprio - qui solo il toggle.
+                    new_strobe_toggle = strobe_white_control.poll(obs)
+                    if new_strobe_toggle is not None:
+                        strobe_white_active[0] = new_strobe_toggle
+                        if not new_strobe_toggle:
+                            # Forza un resync alla disattivazione: il gate
+                            # normale non ha inviato nulla per tutta la
+                            # durata del lampeggio (l'override lo bypassava),
+                            # quindi senza questo le luci resterebbero ferme
+                            # all'ultimo valore del lampeggio finche' non
+                            # cambia per caso il gate stesso - None non
+                            # combacia mai con un valore vero (True/False),
+                            # forza il ri-applica al prossimo tick.
+                            qlc_light_gate_last[0] = {"fixture1": None, "fixture2": None}
+                            strobe_white_last_sent[0] = None
+                        print(f"[STROBO MANUALE] {'attivo' if new_strobe_toggle else 'disattivato'}")
+                        debug_log(f"[STROBO MANUALE] {'attivo' if new_strobe_toggle else 'disattivato'}")
+
+                    # SHUTDOWN (F12): solleva SystemExit dal loop principale -
+                    # eredita da BaseException, quindi il blocco finally piu'
+                    # sotto (la stessa cascata di spegnimento di un Ctrl+C)
+                    # parte identico, nessuna logica duplicata qui.
+                    new_shutdown_trigger = shutdown_control.poll(obs)
+                    if new_shutdown_trigger:
+                        print("[SHUTDOWN] hotkey premuto - arresto in corso...")
+                        debug_log("[SHUTDOWN] hotkey premuto")
+                        raise SystemExit(0)
 
             audio_data = audio.get_metrics()
 
@@ -1145,6 +1199,23 @@ def main():
                     _qlc_set_rgb_both(qlc, r, g, b, current_time)
                     debug_log(f"[QLC] gate cambiato -> {light_gate_now} (combined_pct={combined_pct:.1f}, "
                               f"wave={_qlc_last_wave_scene_showing[0]}, ri-applicato subito, rgb logico={r,g,b})")
+
+                # STROBO BIANCO MANUALE (F8): vince SEMPRE sul gate normale
+                # sopra mentre attivo - lampeggia bianco puro su ENTRAMBI i
+                # fari (Master, non attenuato/gated), ignorando inverse/
+                # calm/colore identita'. Le transizioni OBS continuano
+                # normalmente (a differenza del blackout, qui non si
+                # sospende "if audio_data" - e' un override delle sole
+                # luci). Edge-detected su (fase on/off, non sul tempo) cosi'
+                # non spamma invii identici ogni singolo tick.
+                if strobe_white_active[0]:
+                    blink_on = int(current_time / STROBE_WHITE_BLINK_INTERVAL_S) % 2 == 0
+                    target = 255 if blink_on else 0
+                    if target != strobe_white_last_sent[0]:
+                        for ch in (QLC_CHANNEL_F1_MASTER, QLC_CHANNEL_F1_R, QLC_CHANNEL_F1_G, QLC_CHANNEL_F1_B,
+                                   QLC_CHANNEL_F2_MASTER, QLC_CHANNEL_F2_R, QLC_CHANNEL_F2_G, QLC_CHANNEL_F2_B):
+                            qlc.set_channel(ch, target)
+                        strobe_white_last_sent[0] = target
 
                 # ALTERNANZA 2 USCITE MONITOR: porta in primo piano la
                 # finestra gia' aperta giusta per ciascuna uscita (stacking,
