@@ -1110,6 +1110,17 @@ def main():
                             overlay_pulse_end_time[0] = 0.0
                             if ambient_intensity is None:
                                 _qlc_set_rgb_both(qlc, 0, 0, 0, current_time)
+                                # Loggato apposta (non gli altri invii di
+                                # questo blocco, troppo frequenti) - questo
+                                # e' l'esatto punto dove il decadimento del
+                                # polso a kick finiva a nero secco, la causa
+                                # reale del bug "wave scene accesa ma nera"
+                                # trovato dal vivo 2026-08-01 - utile
+                                # verificare qui che il floor scatti quando
+                                # una scena _wave e' in Program in quel momento.
+                                if _qlc_last_wave_scene_showing[0]:
+                                    debug_log(f"[QLC] decadimento polso finito con enfasi wave attiva -> "
+                                              f"floor applicato, rgb logico={_qlc_last_logical_rgb[0]}")
 
                 # WASH AMBIENT LUCI (QLC+, Step 2): stati di quiete
                 # (INTRO/BREAK/RELAX) - SOSTITUISCE del tutto il polso a kick
@@ -1226,8 +1237,16 @@ def main():
                     qlc_light_gate_last[0] = light_gate_now
                     r, g, b = _qlc_last_logical_rgb[0]
                     _qlc_set_rgb_both(qlc, r, g, b, current_time)
+                    # NOTA: si rilegge _qlc_last_logical_rgb[0] DOPO la
+                    # chiamata (non i vecchi r,g,b locali) perche'
+                    # _qlc_set_rgb_both() puo' averlo modificato applicando
+                    # il floor dell'enfasi wave - loggare i valori pre-
+                    # chiamata avrebbe reso invisibile il floor nei log,
+                    # facendo sembrare "nero" un invio che in realta' non lo
+                    # era (trovato dal vivo 2026-08-01 verificando il fix).
                     debug_log(f"[QLC] gate cambiato -> {light_gate_now} (combined_pct={combined_pct:.1f}, "
-                              f"wave={_qlc_last_wave_scene_showing[0]}, ri-applicato subito, rgb logico={r,g,b})")
+                              f"wave={_qlc_last_wave_scene_showing[0]}, ri-applicato subito, "
+                              f"rgb logico={_qlc_last_logical_rgb[0]})")
 
                 # STROBO BIANCO MANUALE (F8): vince SEMPRE sul gate normale
                 # sopra mentre attivo - lampeggia bianco puro su ENTRAMBI i
