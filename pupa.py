@@ -594,6 +594,20 @@ def main():
     shutdown_control = BinaryControl("Shutdown", CALM_CONTROL_SCENE, SHUTDOWN_SOURCE)
     shutdown_control.resolve(obs, scenes)
 
+    # RESET DI SICUREZZA ALL'AVVIO: questi override "momentanei" non devono
+    # MAI ereditare uno stato "attivo" residuo da una sessione precedente
+    # finita male (crash, taskkill, o semplicemente il processo morto prima
+    # di poter riabbassare la propria stessa source - il caso di SHUTDOWN,
+    # trovato dal vivo 2026-08-01: dopo un F12 riuscito la source restava
+    # 'Mostra', e il prossimo avvio la leggeva gia' "premuta" - il comando
+    # successivo non generava un fronte, F12 sembrava non rispondere piu').
+    # CALM_LEVEL_SOURCES/LOOP_SCENE_SOURCE ne restano fuori apposta - per
+    # quelli lo stato persistente tra riavvii e' quello desiderato.
+    for ctrl in (blackout_control, solo_monitor_control, solo_luci_control, strobe_white_control, shutdown_control):
+        if ctrl.active and obs.get_scene_item_enabled(CALM_CONTROL_SCENE, ctrl.item_id):
+            ctrl.force(obs, False)
+            print(f"[HOTKEY] {ctrl.name}: resettata a spenta all'avvio (era rimasta attiva)")
+
     # ALTERNANZA 2 USCITE MONITOR: attiva solo se configurata in
     # secrets_local.py. window_manager.get_window_manager() sceglie
     # l'implementazione giusta per la piattaforma (Linux: wmctrl/xprop,
