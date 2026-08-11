@@ -10,11 +10,8 @@ obs = OBSController(
     password=OBS_PASSWORD
 )
 
-try:
-    obs.connect()
+if obs.connect():
     print("[OK] OBS CONNESSO!")
     print(f"Versione: {obs.version}")
-except Exception as e:
-    print(f"[ERROR] {e}")
-    import traceback
-    traceback.print_exc()
+else:
+    print("[ERROR] Connessione fallita - vedi il messaggio [OBS] sopra per il motivo.")

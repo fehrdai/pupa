@@ -2,9 +2,19 @@
 OBS Controller - WebSocket v5.7.3 wrapper
 """
 
+import logging
 from obsws_python import ReqClient
 import time
 from debug_logger import debug as debug_log
+
+# obsws_python (non websocket-client - verificato leggendo baseclient.py,
+# usa logger.exception() che stampa il traceback completo su stderr PRIMA
+# di rilanciare l'eccezione) stampa lei stessa un traceback grezzo per un
+# ConnectionRefusedError/TimeoutError - non e' un crash reale (il nostro
+# except la gestisce comunque correttamente), solo rumore che copre il
+# messaggio [OBS] pensato apposta. Silenziata qui, non a livello globale,
+# per non nascondere log utili di altre librerie.
+logging.getLogger("obsws_python").setLevel(logging.CRITICAL)
 
 
 class OBSController:
@@ -19,16 +29,41 @@ class OBSController:
         self.current_scene = None
     
     def connect(self):
-        """Connect to OBS WebSocket"""
-        self.client = ReqClient(
-            host=self.host,
-            port=self.port,
-            password=self.password,
-            timeout=5
-        )
+        """Connect to OBS WebSocket. Ritorna False (invece di lasciar
+        propagare il traceback grezzo di obsws_python/websocket) se OBS non
+        e' raggiungibile o rifiuta le credenziali - pupa.py (vedi
+        'if not obs.connect()') si aspetta gia' questo contratto, ma prima
+        non veniva mai rispettato: qualunque fallimento (OBS chiuso, host/
+        porta sbagliati, password errata) usciva come ConnectionRefusedError
+        non gestito invece del messaggio [ERROR] pensato apposta - trovato
+        dal vivo 2026-08-01 dopo un cambio IP DHCP silenzioso."""
+        try:
+            self.client = ReqClient(
+                host=self.host,
+                port=self.port,
+                password=self.password,
+                timeout=5
+            )
+            info = self.client.get_version()
+        except ConnectionRefusedError:
+            print(f"[OBS] Connessione rifiutata da {self.host}:{self.port} - "
+                  f"OBS e' avviato? Il server WebSocket e' attivo "
+                  f"(Strumenti > WebSocket Server Settings)? Host/porta in "
+                  f"secrets_local.py sono corretti?")
+            debug_log(f"[OBS] connect fallito: connessione rifiutata da {self.host}:{self.port}")
+            return False
+        except OSError as e:
+            print(f"[OBS] Impossibile raggiungere {self.host}:{self.port} ({e}) - "
+                  f"host/porta in secrets_local.py sono corretti per questa macchina?")
+            debug_log(f"[OBS] connect fallito: {e}")
+            return False
+        except Exception as e:
+            print(f"[OBS] Connessione a {self.host}:{self.port} fallita: {e} - "
+                  f"controlla la password in secrets_local.py se OBS e' "
+                  f"raggiungibile ma rifiuta l'autenticazione.")
+            debug_log(f"[OBS] connect fallito: {e}")
+            return False
 
-        # Fetch OBS version
-        info = self.client.get_version()
         self.version = info.obs_version
         self.ws_version = info.rpc_version
         return True
