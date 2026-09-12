@@ -22,6 +22,7 @@ from debug_logger import debug as debug_log
 from runtime_monitor import RuntimeMonitor
 from window_manager import get_window_manager
 from hotkey_controller import MultiLevelControl, BinaryControl
+from shutdown_helpers import shutdown_step, spegni_luci_qlc, obs_a_nero
 
 try:
     from secrets_local import OBS_HOST, OBS_PORT, OBS_PASSWORD, AUDIO_DEVICE_NAME
@@ -1394,100 +1395,19 @@ def main():
     finally:
         print("[PUPA] Arresto pulito.")
 
-        def _shutdown_step(description, fn):
-            """Ogni step di arresto e' protetto A SE' - un secondo Ctrl+C per
-            l'impazienza durante la pulizia (es. mentre la chiamata di rete a
-            OBS e' in corso) non deve bloccare gli step successivi.
-            'except Exception' da solo NON basta: KeyboardInterrupt eredita
-            da BaseException, non da Exception, quindi un nuovo Ctrl+C durante
-            uno step sfuggirebbe e interromperebbe tutto il resto - trovato
-            dal vivo 2026-07-30 (OBS non passava a nero: il log si fermava a
-            meta' della chiamata di switch_scene, il resto del finally non
-            veniva mai raggiunto)."""
-            try:
-                fn()
-            except BaseException as e:
-                print(f"[PUPA] Step di arresto '{description}' interrotto/fallito: {e}")
-
-        def _spegni_luci():
-            # Senza questo i fari restano accesi/a meta' polso con l'ultimo
-            # valore inviato, dato che QLC+ non ha un default "torna a 0" da
-            # solo. Riconnette attivamente se il socket e' caduto (non solo
-            # "se gia' connesso") - trovato dal vivo 2026-07-29: un disconnect
-            # transitorio proprio nel momento dello stop faceva saltare lo
-            # spegnimento in silenzio.
-            if qlc.sock is None:
-                qlc.connect()
-            if qlc.sock is not None:
-                for ch in ALL_LIGHT_CHANNELS:
-                    qlc.set_channel(ch, 0)
-                print("[QLC] Fari spenti.")
-            else:
-                print("[QLC] Impossibile spegnere i fari (QLC+ non raggiungibile).")
-
-        def _obs_a_nero():
-            # Monitor a nero all'arresto (richiesta operatore: fermare PUPA
-            # deve fermare anche i software collegati). transition_ms=50 (non
-            # 1: OBS rifiuta SetCurrentSceneTransitionDuration sotto i 50ms,
-            # errore codice 402 - trovato dal vivo 2026-07-30 leggendo
-            # debug.log, non a intuito) - resta comunque quasi istantaneo.
-            #
-            # 2026-07-30 (stessa sera, dopo un test dubstep): l'operatore ha
-            # visto OBS restare sull'ultima scena viva nonostante il log
-            # mostrasse "[OBS] APPLICATA: Taglio 50ms -> black_color" -
-            # scoperto rileggendo obs_controller.py che quella riga di log
-            # scatta subito dopo aver impostato tipo/durata transizione, PRIMA
-            # della vera chiamata set_current_program_scene() - "APPLICATA"
-            # non ha MAI confermato che lo switch sia arrivato a destinazione,
-            # solo che la transizione era stata configurata. Stessa lezione
-            # di sempre in questo file: un log che conferma che il codice e'
-            # girato come scritto non e' la stessa cosa di una conferma reale.
-            # Fix: verificare DAVVERO con get_current_scene() dopo il sleep,
-            # e ritentare una volta se non e' quella attesa, invece di fidarsi
-            # del solo "nessuna eccezione sollevata".
-            obs.switch_scene(brain.BLACK_PAUSE_SCENE, transition_ms=50, transition_type="Taglio")
-            # Margine prima di verificare: la richiesta WebSocket non blocca
-            # fino alla conferma di OBS - senza pausa la lettura successiva
-            # arriverebbe troppo presto anche a switch riuscito.
-            time.sleep(0.3)
-            actual_scene = obs.get_current_scene()
-            if actual_scene != brain.BLACK_PAUSE_SCENE:
-                debug_log(f"[OBS] switch a nero non confermato (scena reale='{actual_scene}') - ritento")
-                obs.switch_scene(brain.BLACK_PAUSE_SCENE, transition_ms=50, transition_type="Taglio")
-                time.sleep(0.3)
-                actual_scene = obs.get_current_scene()
-
-            if actual_scene == brain.BLACK_PAUSE_SCENE:
-                print(f"[OBS] {brain.BLACK_PAUSE_SCENE} in programma (confermato).")
-                debug_log(f"[OBS] {brain.BLACK_PAUSE_SCENE} confermato in programma dopo switch")
-            else:
-                print(f"[OBS] ATTENZIONE: switch a nero NON confermato - scena reale rimasta '{actual_scene}'")
-                debug_log(f"[OBS] switch a nero NON confermato dopo retry - scena reale='{actual_scene}'")
-
-            # 2026-07-30 (stesso giorno, dopo la conferma via get_current_scene
-            # sopra): l'operatore ha visto lo switch "confermato" nel log ma
-            # il monitor fisico non e' andato a nero comunque - root cause
-            # reale: sull'alternanza monitor a stacking (vedi window_manager.py)
-            # ogni uscita ha 2 Proiettori GIA' APERTI sovrapposti (uno segue
-            # il Programma, l'altro e' bloccato in permanenza su MONITOR_BLACK_
-            # SCENE) - switchare il Programma cambia solo cosa mostra la
-            # finestra "on", ma se al momento dello stop era in primo piano
-            # quella finestra e non si ridisegna in tempo (o resta davanti per
-            # qualunque motivo), il monitor fisico resta sull'ultimo frame
-            # invece di andare a nero, indipendentemente da quanto sopra sia
-            # davvero riuscito. Fix: forza ESPLICITAMENTE in primo piano la
-            # finestra "off" (gia' bloccata su nero, stesso meccanismo gia'
-            # usato per il resto dello show) per ENTRAMBE le uscite, invece di
-            # fidarsi che la finestra giusta sia gia' quella davanti.
-            if monitor_show1_off_id is not None:
-                window_manager.activate(monitor_show1_off_id)
-            if monitor_show2_off_id is not None:
-                window_manager.activate(monitor_show2_off_id)
-
-        _shutdown_step("spegni luci QLC+", _spegni_luci)
-        _shutdown_step("OBS a nero", _obs_a_nero)
-        _shutdown_step("stop audio", audio.stop)
-        _shutdown_step("disconnetti OBS", obs.disconnect)
+        # Cascata di arresto condivisa con gli script gemelli (exhibition/,
+        # slideshow/) - vedi shutdown_helpers.py. Estrazione meccanica del
+        # 2026-08-14 dalle funzioni annidate che vivevano qui prima (stesso
+        # comportamento, stessa storia/commenti di debug dal vivo - vedi
+        # quel file per il "perche'" di ogni dettaglio).
+        shutdown_step("spegni luci QLC+", lambda: spegni_luci_qlc(qlc, ALL_LIGHT_CHANNELS))
+        shutdown_step("OBS a nero", lambda: obs_a_nero(
+            obs, brain.BLACK_PAUSE_SCENE,
+            (monitor_show1_off_id, monitor_show2_off_id),
+            window_manager, debug_log
+        ))
+        shutdown_step("stop audio", audio.stop)
+        shutdown_step("disconnetti OBS", obs.disconnect)
 
 
 if __name__ == "__main__":
