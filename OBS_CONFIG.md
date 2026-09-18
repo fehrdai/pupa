@@ -65,6 +65,11 @@ Actual key bindings live in the OBS scene collection file itself (`PUPA_Control`
 | `PUPA_STROBE_WHITE` | binary toggle | **F8** show, Shift+F8 hide | While active, blinks pure white on both fixtures every tick (Master, ~10Hz), overriding `light_mode`/`forced_mode`/color entirely — OBS scene transitions keep running normally, this only overrides the lights. Toggle, not a fixed-duration burst (redesigned 2026-08-01 — the original one-shot burst felt too short live, operator wanted a real on/off). |
 | `PUPA_SHUTDOWN` (2026-08-01) | one-shot | **F12** show, Shift+F12 hide | Stops PUPA gracefully from OBS instead of needing terminal focus for Ctrl+C — raises `SystemExit` from the main loop, which runs through the exact same shutdown cascade (lights off, OBS to black, disconnect) since it's a `finally` block. Added after the operator found the monitor-alternation Projector windows kept stealing focus from the terminal during a live test. |
 
+| `PUPA_LUCI` (2026-09-19, **new, source not yet created in OBS**) | binary toggle | *to be chosen* | Lights on (Show) / off (Hide, fade) — read by `lights/pupa_luci.py`, not by `pupa.py`. Persists across restarts. Create with `lights/create_obs_sources.py`. |
+| `PUPA_LUCI_LIVELLO_1`..`_3` (2026-09-19, **new, not yet created**) | 3-way exclusive | *to be chosen* | Lights intensity ceiling ×0.35/×0.70/×1.00 (default 2) — same "most recently shown wins" mechanism as CALM. Read by `lights/pupa_luci.py`. |
+
+**Lights redesign 2026-09-19**: the light rows above (F5/F6/F7 `LIGHTMODE_*`, F9 `SOLO_LUCI`, F10 `SOLO_MONITOR`, and the lights half of F8/F11/F12) describe `pupa.py`'s OLD light behaviour, still in the code until phase 2 removes it. The new lights process (`lights/pupa_luci.py`, see `LIGHTS_CONFIG.md`) reads `PUPA_STROBE_WHITE` (F8), `PUPA_BLACKOUT` (F11), `PUPA_SHUTDOWN` (F12) plus the two new sources; F5–F7 and F9/F10 have no effect on it.
+
 **Correction 2026-09-18**: this table previously had `PUPA_SOLO_MONITOR`/`PUPA_SOLO_LUCI` swapped (said F9/monitor, F10/luci) — the live Linux binding is F9/luci, F10/monitor, now fixed above. `PUPA_CALM_0`..`_3`'s F1-F4 binding was missing entirely, also added.
 
 ### What's still NOT discoverable from OBS (creative/curatorial, stays hardcoded or config-driven)
