@@ -2376,7 +2376,13 @@ class HybridCouplesModel:
             # resta bloccata tutto quel tempo invece di ririsolversi al
             # prossimo bivio. Azzerare qui, in sync con l'azzeramento di
             # beat_count, risolve alla radice.
-            self.monitor_last_flip_bar = 0
+            # 2026-09-18: NON piu' azzerato qui per i monitor. Presupponeva che audio_analyzer azzerasse
+            # beat_count nello stesso istante, ma il flag is_break grezzo dell'analyzer e lo STATO
+            # BREAK del brain non coincidono: con lo stato che oscilla BREAK<->altro (visto dal vivo,
+            # dub techno CALM 3) flip_bar tornava a 0 mentre beat_count NON era azzerato -> diff enorme
+            # -> flip di fase ogni ~secondo (sfarfallio A/B, 41 cambi/min) appena il flip non ha piu'
+            # richiesto is_beat. Ora get_monitor_outputs si riallinea da solo quando il contatore
+            # torna INDIETRO (current_bar < flip_bar), l'unico caso reale.
             self.light_last_flip_bar = 0  # stesso motivo di monitor_last_flip_bar sopra (Step 3 piano luci)
 
             # CAMBIO TRACCIA: non decidiamo SUBITO (il BPM appena uscito dal
