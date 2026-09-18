@@ -465,20 +465,87 @@ BLACK_PAUSE_HOLD = (1.5, 3.5)  # secondi di nero
 # cooldown RUNUP = base/flash); "flash_len" allunga il frame del lampo
 # singolo (interval * flash_len) cosi' a CALM alto e' un bagliore e non un
 # guizzo da strobo. A 0 entrambi = 1.0 (nessun effetto). Numeri di partenza.
+#
+# 2026-09-18, sera tarda: CALM 0 e CALM 3 sono ora i due ESTREMI (operatore:
+# "vorrei con gli stati di calm forzare il comportamento di pupa
+# indipendentemente dalla musica... calm0 veloci, cut, flash; calm3 lenti,
+# morbidi, no cut e no flash come estremo"), 1 e 2 sono "vie di mezzo" da
+# testare dopo. A CALM 3 quindi "cut" e "flash" sono ZERO (non piu' 0.05/0.5):
+# spengono in un colpo solo tagli, raffiche strobo/cut, lampo colorato, lampo
+# INTRO e flash nero pre-drop RUNUP, qualunque sia lo stato musicale. 3 assi
+# nuovi: "min_transition_ms" (pavimento di durata di OGNI transizione del
+# ciclo, cosi' anche in DROP/PEAK - che di base durano 250/180ms - a CALM 3
+# restano dissolvenze lente), "overlap_push" (probabilita' di sovrapposizione
+# A<->B anche negli stati "che spingono", dove prima era sempre 0 - vedi
+# _get_overlap_probability) e "breather_len" (durata dei respiri monitor
+# both_on/both_off, prima scalata da monitor_bars come le fasi A/B, ora
+# indipendente cosi' il nero pieno non si allunga con la lentezza). E
+# "monitor_converge" (1/0): a 0 i monitor NON convergono su entrambi accesi
+# in DROP/PEAK. CALM_POOL_EXCLUDE/CALM_POOL_EXTRA (sotto) tolgono Digital
+# Glitch e aggiungono Fade al pool transizioni negli estremi calmi.
+# "overlay_pulse" (1.0/0.67/0.33/0.0): scala il picco del POLSO DI COLORE A SCHERMO che
+# pupa.py fa scattare su OGNI kick (color_overlay) - trovato dal vivo 2026-09-18 come vera
+# causa dei "colpi di flash colorati sempre frenetici" a CALM 3, perche' viveva in pupa.py e
+# non passava da _calm(). Solo lo schermo: le luci QLC+ che lo rispecchiano non cambiano
+# (in attesa del ridisegno luci).
+# 2026-09-18, ultimo giro (operatore, test CALM 3: "poche scene _B e troppo kick... in
+# modalita' calm3 devono essere dominanti scene _A e _B come tempo di permanenza, i kick
+# passaggi veloci e rari, wave vanno bene cosi', i cambi anche piu' lenti"). Misura dal
+# pupa.log: _A 68% del tempo, _B 16% (26 visite di 1.8s, quasi tutte peek), scene kick 16%
+# (10 visite di 4.8s) - colpa mia: azzerando "flash" la sua quota (30%) andava meta' a
+# wave_kick. Assi nuovi: "kick_share" (moltiplica la prob. di wave_kick, in tutto il brain:
+# ciclo principale E ingresso INTRO/BREAK; la quota tolta va SOLO a scena _B),
+# "kick_dwell" (permanenza minima su wave_kick, MIN_WAVE_KICK_DWELL x), "overlap_hold"
+# (x durata dell'hold delle sovrapposizioni), "intro_break_ab" (1 = INTRO/BREAK usano il
+# ciclo A/B normale invece di quello esclusivo A<->wave_kick, che non ha mai una _B).
+# CALM_DWELL (sotto): permanenza MINIMA su _A e su _B a livelli alti.
+# Livelli 1-2: interpolazione lineare tra 0 e 3 per gli assi nuovi/modificati,
+# valori invariati per gli altri (mai provati dal vivo).
 CALM_MULTIPLIERS = {
     0: {"cut": 1.0,  "fade": 1.0, "black_prob": 1.0, "black_hold": 1.0, "burst_len": 1.0,
         "monitor_bars": 1.0, "breather_prob": 1.0, "breather_off_bias": 0.0, "transition_p": 1.0, "debounce": 1.0,
-        "flash": 1.0, "flash_len": 1.0},
+        "flash": 1.0, "flash_len": 1.0, "min_transition_ms": 0, "overlap_push": 0.0,
+        "breather_len": 1.0, "monitor_converge": 1, "overlay_pulse": 1.0, "kick_share": 1.0, "kick_dwell": 1.0, "overlap_hold": 1.0, "intro_break_ab": 0, "wave_push": 0.0, "enter_b_boost": 0.0},
     1: {"cut": 0.55, "fade": 1.25, "black_prob": 1.4, "black_hold": 1.2, "burst_len": 0.7,
-        "monitor_bars": 1.3, "breather_prob": 1.3, "breather_off_bias": 0.10, "transition_p": 0.55, "debounce": 2.0,
-        "flash": 0.8, "flash_len": 1.3},
+        "monitor_bars": 1.3, "breather_prob": 1.07, "breather_off_bias": 0.05, "transition_p": 0.55, "debounce": 2.0,
+        "flash": 0.67, "flash_len": 1.3, "min_transition_ms": 600, "overlap_push": 0.17,
+        "breather_len": 1.2, "monitor_converge": 1, "overlay_pulse": 0.67, "kick_share": 0.75, "kick_dwell": 0.85, "overlap_hold": 1.2, "intro_break_ab": 0, "wave_push": 0.13, "enter_b_boost": 0.15},
     2: {"cut": 0.25, "fade": 1.6, "black_prob": 2.0, "black_hold": 1.6, "burst_len": 0.4,
-        "monitor_bars": 1.8, "breather_prob": 1.6, "breather_off_bias": 0.25, "transition_p": 0.25, "debounce": 4.0,
-        "flash": 0.65, "flash_len": 2.0},
-    3: {"cut": 0.05, "fade": 2.2, "black_prob": 2.8, "black_hold": 2.2, "burst_len": 0.15,
-        "monitor_bars": 2.5, "breather_prob": 2.0, "breather_off_bias": 0.45, "transition_p": 0.05, "debounce": 8.0,
-        "flash": 0.5, "flash_len": 3.0},
+        "monitor_bars": 1.8, "breather_prob": 1.13, "breather_off_bias": 0.10, "transition_p": 0.25, "debounce": 4.0,
+        "flash": 0.33, "flash_len": 2.0, "min_transition_ms": 1300, "overlap_push": 0.33,
+        "breather_len": 1.35, "monitor_converge": 1, "overlay_pulse": 0.33, "kick_share": 0.5, "kick_dwell": 0.7, "overlap_hold": 1.6, "intro_break_ab": 0, "wave_push": 0.27, "enter_b_boost": 0.3},
+    3: {"cut": 0.0,  "fade": 2.2, "black_prob": 2.8, "black_hold": 2.2, "burst_len": 0.15,
+        "monitor_bars": 2.5, "breather_prob": 1.2, "breather_off_bias": 0.15, "transition_p": 0.05, "debounce": 8.0,
+        "flash": 0.0, "flash_len": 3.0, "min_transition_ms": 2000, "overlap_push": 0.50,
+        "breather_len": 1.5, "monitor_converge": 0, "overlay_pulse": 0.0, "kick_share": 0.2, "kick_dwell": 0.5, "overlap_hold": 2.2, "intro_break_ab": 1, "wave_push": 0.40, "enter_b_boost": 0.6},
 }
+# Pool transizioni per livello CALM (2026-09-18): solo negli estremi calmi.
+# Digital Glitch e' la piu' psichedelica (rank 4); Fade (dissolvenza vera,
+# sempre presente in OBS, rank 0 = "la piu' calma") fa da sovrapposizione.
+# Permanenza MINIMA (secondi, range casuale) su _A e su _B per livello CALM: a CALM alto le
+# due scene devono essere le protagoniste per TEMPO, non solo per numero di visite (il
+# ritorno da _B era "sempre immediato" al kick successivo, quindi _B durava pochi secondi).
+# Vale in tutti gli stati musicali. wave_kick ha la sua permanenza (MIN_WAVE_KICK_DWELL).
+CALM_DWELL = {
+    1: {"A": (1.5, 3.0), "B": (1.0, 2.0)},
+    2: {"A": (3.0, 6.0), "B": (3.5, 6.5)},
+    3: {"A": (5.0, 9.0), "B": (6.5, 11.0)},
+}
+# Tetto (ms) alla durata delle transizioni da/verso wave_kick: e' un "passaggio veloce",
+# non deve durare piu' della sua permanenza (il fade dipende dal bass basso x fade = fino a 6s).
+CALM_KICK_FADE_CAP_MS = {2: 3000, 3: 2000}
+# Pesi FISSI per tipo di transizione a CALM 3 (operatore: "piu' displace... predominante come fade
+# e blur"): sostituiscono il blend per rank/stato di _weighted_transition, cosi' la scelta non
+# dipende piu' dalla musica. Displace aveva rank 3 ("intensa") e con p~0 pesava meno di tutte.
+CALM_POOL_WEIGHTS = {3: {"Fade": 3, "Blur": 3, "Displace": 3, "Burn": 1, "Luma Wipe": 1}}
+# Transizione usata dalle SOVRAPPOSIZIONI (peek con hold): di base solo Fade/Dissolvenza. A CALM 3
+# entrano anche Blur e Displace (operatore: Displace "predominante come fade e blur" - le
+# sovrapposizioni sono meta' dei cambi, senza questo Displace non poteva esserlo). SPERIMENTALE:
+# una transizione a shader tenuta a meta' per secondi mostra un frame deformato - se non piace,
+# togliere la voce del livello qui (torna a solo Fade/Dissolvenza).
+CALM_OVERLAP_WEIGHTS = {3: {"Fade": 3, "Dissolvenza": 1, "Blur": 2, "Displace": 3}}
+CALM_POOL_EXCLUDE = {3: ("Digital Glitch",)}
+CALM_POOL_EXTRA = {2: ("Fade",), 3: ("Fade",)}
 CALM_BLACK_PAUSE_PROB_CAP = 0.9  # non deve mai diventare "quasi sempre nero"
 CALM_BREATHER_PROB_CAP = 0.9  # stesso principio, per il respiro monitor/luci
 
@@ -540,6 +607,17 @@ MONITOR_BREATHER_PROBABILITY = {
     State.BUILD:  0.10,
 }
 MONITOR_BREATHER_BARS = 2  # durata del respiro quando innescato, in battute - fisso, non serve altra variabilita' qui
+# TIMER DI SICUREZZA (2026-09-18): il cambio di fase dei monitor e' contato in
+# battute (beat_count // 4), ma il contatore puo' azzerarsi/restare fermo senza
+# che monitor_last_flip_bar lo sappia (audio_analyzer lo azzera a ogni uscita da
+# is_break grezzo, brain solo a BREAK->altro dello stato) - misurato in test
+# live CALM 3: fasi 3-19x piu' lunghe del previsto, tra cui "both_off" (entrambi
+# i monitor neri) fino a 44s e oltre. Il timer in SECONDI non dipende dal
+# contatore: una fase viene forzata a passare se dura piu' di FACTOR x la durata
+# prevista (bars_needed x 4 battiti x 60/BPM), e "both_off" ha in piu' un tetto
+# assoluto. Valori di partenza da tarare.
+MONITOR_WATCHDOG_FACTOR = 1.5
+MONITOR_BOTH_OFF_MAX_S = 8.0
 MONITOR_BREATHER_CHOICE_WEIGHTS = {
     State.INTRO:  {"both_off": 0.6, "both_on": 0.4},
     State.BREAK:  {"both_off": 0.7, "both_on": 0.3},
@@ -792,6 +870,7 @@ OVERLAP_TRANSITION_CHOICES = ["Fade", "Dissolvenza"]
 OVERLAP_HOLD_B_TO_A = (2.0, 4.0)   # secondi: sovrapposizione prolungata (arrivo verso _A)
 OVERLAP_HOLD_A_TO_B = (0.5, 2.0)   # secondi: sovrapposizione piu' breve (arrivo verso _B)
 OVERLAP_TARGET_BLEND = (0.4, 0.6)  # frazione di blend raggiunta durante l'hold
+OVERLAP_MAX_TRANSITION_MS = 18000  # OBS accetta max 20000ms per transizione: tetto con margine (15000 -> 18000 su richiesta operatore)
 
 # wave_kick: permanenza minima prima di poter tornare a _A (deve avere spazio
 # visibile). Era stato alzato 3.0 -> 6.0 per dargli piu' presenza; con la
@@ -854,6 +933,8 @@ class HybridCouplesModel:
         self.last_bpm = 0.0  # Ultimo BPM stimato da audio_analyzer, per l'intervallo strobo agganciato al beat
         self.last_is_beat = False  # Griglia di beat di audio_analyzer (vedi get_monitor_outputs)
         self.last_beat_count = 0
+        self.calm_dwell_until = 0.0   # fino a quando (current_time) la scena corrente ha la permanenza minima CALM_DWELL
+        self._calm_dwell_side = None  # ultimo lato visto ("A"/"B"/"K") - un cambio riavvia la permanenza
         self.calm_level = 0  # 0-3, impostato dall'hotkey OBS (vedi CALM_MULTIPLIERS e set_calm_level)
         self.loop_scene = False  # hotkey OBS: congela il timer 4min sulla scena_A corrente (vedi set_loop_scene)
         self.light_mode = "inverse"  # "sync"/"alternate"/"inverse" - hotkey F5/F6/F7, vedi set_light_mode/get_light_outputs
@@ -1214,20 +1295,55 @@ class HybridCouplesModel:
         if self.forced_mode == "solo_luci":
             return {"show1": False, "show2": False}
 
-        if self.current_state in MONITOR_BOTH_ON_STATES:
+        # CALM 3 (monitor_converge=0, 2026-09-18): niente convergenza su
+        # "entrambi accesi" in DROP/PEAK - l'alternanza A/B lenta prosegue
+        # qualunque sia l'energia della musica.
+        if self.current_state in MONITOR_BOTH_ON_STATES and self._calm("monitor_converge"):
             return {"show1": True, "show2": True}
 
-        bars_needed = MONITOR_BREATHER_BARS if self.monitor_seq_phase in ("both_on", "both_off") \
+        in_breather = self.monitor_seq_phase in ("both_on", "both_off")
+        bars_needed = MONITOR_BREATHER_BARS if in_breather \
             else MONITOR_SEQUENCE_BARS.get(self.current_state, 2)
         # CALM MODE (2026-07-30): ogni fase (A/B normale O un respiro) dura
         # piu' a lungo quanto piu' alto e' calm_level - vedi CALM_MULTIPLIERS.
-        bars_needed = max(1, round(bars_needed * self._calm("monitor_bars")))
+        # Dal 2026-09-18 il respiro ha un suo moltiplicatore (breather_len)
+        # invece di monitor_bars: il nero pieno non si allunga con la lentezza.
+        bars_needed = max(1, round(bars_needed * self._calm("breather_len" if in_breather else "monitor_bars")))
 
-        if self.last_bpm > 0:
+        if self._monitor_watchdog_expired(current_time, bars_needed):
+            stalled_phase = self.monitor_seq_phase
+            old_flip_bar = self.monitor_last_flip_bar
+            self.monitor_last_flip_time = current_time
+            # riallinea anche il contatore a battute, altrimenti un azzeramento
+            # di beat_count lascerebbe current_bar < monitor_last_flip_bar
+            self.monitor_last_flip_bar = self.last_beat_count // BEATS_PER_BAR
+            self._advance_monitor_sequence()
+            # dettaglio per capire PERCHE' il conteggio a battute non ha fatto
+            # avanzare la fase (ipotesi: is_beat perso dal loop lento, azzeramento
+            # di beat_count, is_beat/bar-start mai coincidenti) - vedi commento
+            # sopra MONITOR_WATCHDOG_FACTOR.
+            debug_log(f"[MONITOR-SEQ] WATCHDOG fase {stalled_phase} -> {self.monitor_seq_phase} "
+                      f"stato={self.current_state.value} bars_needed={bars_needed} "
+                      f"beat_count={self.last_beat_count} bar={self.last_beat_count // BEATS_PER_BAR} "
+                      f"old_flip_bar={old_flip_bar} bpm={self.last_bpm:.1f} is_beat={self.last_is_beat}")
+        elif self.last_bpm > 0:
             current_bar = self.last_beat_count // BEATS_PER_BAR
-            is_bar_start = self.last_beat_count % BEATS_PER_BAR == 0
-            if (self.last_is_beat and is_bar_start
-                    and (current_bar - self.monitor_last_flip_bar) >= bars_needed):
+            # FIX 2026-09-18 (diagnosi dai log WATCHDOG: 33-56 interventi in 6-10 min).
+            # (1) il contatore torna indietro (audio_analyzer lo azzera a ogni uscita da
+            #     is_break grezzo, brain solo a BREAK->altro dello stato): il confronto
+            #     diventava negativo e la fase restava ferma -> riallinea.
+            # (2) is_beat e' un impulso di UN blocco audio: il loop, piu' lento, lo perde
+            #     spesso, e il flip richiedeva che coincidesse con l'inizio battuta. Ora il
+            #     flip scatta al primo tick in cui il contatore ha raggiunto la soglia
+            #     (beat_count avanza esattamente all'inizio di ogni battuta, quindi resta
+            #     allineato alla battuta senza dipendere dall'impulso).
+            if current_bar < self.monitor_last_flip_bar:
+                # riallinea CONSERVANDO il tempo gia' trascorso nella fase (in battute reali),
+                # invece di ripartire da zero: altrimenti ogni reset allunga la fase corrente
+                bar_s = BEATS_PER_BAR * 60.0 / self.last_bpm
+                elapsed_bars = int((current_time - self.monitor_last_flip_time) / bar_s) if self.monitor_last_flip_time > 0 else 0
+                self.monitor_last_flip_bar = current_bar - elapsed_bars
+            if (current_bar - self.monitor_last_flip_bar) >= bars_needed:
                 self.monitor_last_flip_bar = current_bar
                 self.monitor_last_flip_time = current_time
                 self._advance_monitor_sequence()
@@ -1248,6 +1364,19 @@ class HybridCouplesModel:
         if self.monitor_seq_phase == "both_on":
             return {"show1": True, "show2": True}
         return {"show1": False, "show2": False}  # "both_off"
+
+    def _monitor_watchdog_expired(self, current_time, bars_needed):
+        """True se la fase monitor corrente dura da troppo (vedi
+        MONITOR_WATCHDOG_FACTOR/MONITOR_BOTH_OFF_MAX_S) - indipendente dal
+        contatore di battute, solo orologio."""
+        if self.monitor_last_flip_time <= 0:
+            self.monitor_last_flip_time = current_time  # primo tick: parte da adesso
+            return False
+        limit = MONITOR_BOTH_OFF_MAX_S if self.monitor_seq_phase == "both_off" else float("inf")
+        if self.last_bpm > 0:
+            expected_s = bars_needed * BEATS_PER_BAR * 60.0 / self.last_bpm
+            limit = min(limit, expected_s * MONITOR_WATCHDOG_FACTOR)
+        return (current_time - self.monitor_last_flip_time) >= limit
 
     def _advance_monitor_sequence(self):
         """Avanza la sequenza programmata (vedi get_monitor_outputs):
@@ -1571,6 +1700,14 @@ class HybridCouplesModel:
         # nero fisso; fallback su BLACK_PAUSE_SCENE se l'identita' non ha
         # ancora una waveform assegnata/disponibile in questa installazione OBS.
         black_pause_prob = min(CALM_BLACK_PAUSE_PROB_CAP, BLACK_PAUSE_PROBABILITY * self._calm("black_prob"))
+        # Negli stati "che spingono" (overlap_push > 0 solo a CALM alto) la
+        # sovrapposizione e' SEMPRE un peek parziale, mai nero pieno: il nero
+        # non deve aumentare solo perche' sono aumentate le sovrapposizioni.
+        # 2026-09-18 (operatore, "il wave un po' mi spiace che non si veda piu'"): a CALM alto
+        # la pausa con waveform (le scene *_wave) torna possibile anche qui, con la propria
+        # probabilita' (asse "wave_push") - non con quella del nero pieno, che resta fuori.
+        if self.current_state in OVERLAP_PUSHING_STATES:
+            black_pause_prob = self._calm("wave_push") if BLACK_PAUSE_PROBABILITY > 0 else 0.0
         is_black_pause = random.random() < black_pause_prob
 
         if is_black_pause:
@@ -1590,10 +1727,21 @@ class HybridCouplesModel:
             else:
                 hold_time = random.uniform(*OVERLAP_HOLD_A_TO_B)
 
+            hold_time *= self._calm("overlap_hold")  # CALM: sovrapposizioni piu' lunghe (2026-09-18)
             target_pct = random.uniform(*OVERLAP_TARGET_BLEND)
             forward_ms = max(150, int((hold_time * 1000) / target_pct))
 
         reverse_ms = random.randint(300, 600)
+        # CALM (2026-09-18): stesso pavimento di durata del ciclo principale
+        # (vedi min_transition_ms), altrimenti l'ingresso/ritorno di una
+        # sovrapposizione resta un guizzo di 300-600ms anche a CALM 3. Zero a CALM 0.
+        floor_ms = self._calm("min_transition_ms")
+        forward_ms = max(forward_ms, floor_ms)
+        reverse_ms = max(reverse_ms, floor_ms)
+        # OBS rifiuta durate > 20000ms (SetCurrentSceneTransitionDuration, errore 402 visto
+        # dal vivo 2026-09-18 con hold x2.2: 8.5s / 0.4 = 21s). Tetto prudente, vale a tutti i CALM.
+        forward_ms = min(forward_ms, OVERLAP_MAX_TRANSITION_MS)
+        reverse_ms = min(reverse_ms, OVERLAP_MAX_TRANSITION_MS)
 
         self.overlap_active = True
         self.overlap_base_scene = current_scene
@@ -1601,8 +1749,18 @@ class HybridCouplesModel:
         self.overlap_hold_until = current_time + hold_time
         self.overlap_forward_duration_ms = forward_ms
         self.overlap_reverse_duration_ms = reverse_ms
-        self.overlap_transition_choice = random.choice(OVERLAP_TRANSITION_CHOICES)
+        ow = CALM_OVERLAP_WEIGHTS.get(self.calm_level)
+        if ow:
+            ok_names = set(TRANSITION_POOL) | set(OVERLAP_TRANSITION_CHOICES)
+            ow = {k: v for k, v in ow.items() if k in ok_names}
+        if ow:
+            self.overlap_transition_choice = random.choices(list(ow), weights=list(ow.values()), k=1)[0]
+        else:
+            self.overlap_transition_choice = random.choice(OVERLAP_TRANSITION_CHOICES)
         self.overlap_is_black_pause = is_black_pause
+        if CALM_DWELL.get(self.calm_level):
+            # una sovrapposizione conta come una visita: niente altra decisione subito dopo
+            self.calm_dwell_until = max(self.calm_dwell_until, self.overlap_hold_until + random.uniform(2.0, 4.0))
 
         self.last_transition_is_return = peek_is_return
         self.last_decision_kind = "overlap_forward"
@@ -1810,6 +1968,29 @@ class HybridCouplesModel:
             self.state_start_time = current_time
             self.recent_kick_peak_bass = 0  # nuovo stato, si riparte a cercare il "kick piu' alto"
 
+    def _update_calm_dwell(self, current_time):
+        """Riavvia la permanenza minima CALM_DWELL quando cambia il lato (A/B/wave_kick).
+        wave_kick non ha permanenza qui (usa MIN_WAVE_KICK_DWELL). A CALM 0 e' inattiva."""
+        cfg = CALM_DWELL.get(self.calm_level)
+        if not cfg:
+            self.calm_dwell_until = 0.0
+            self._calm_dwell_side = None
+            return
+        if self.in_scene_a:
+            side = "A"
+        elif self.temp_b_scene == "wave_kick":
+            side = "K"
+        else:
+            side = "B"
+        if side != self._calm_dwell_side:
+            self._calm_dwell_side = side
+            rng = cfg.get(side)
+            self.calm_dwell_until = current_time + random.uniform(*rng) if rng else 0.0
+
+    def _cap_kick_fade(self, fade_ms):
+        cap = CALM_KICK_FADE_CAP_MS.get(self.calm_level)
+        return min(fade_ms, cap) if cap else fade_ms
+
     def _get_overlap_probability(self):
         """Probabilita' di sovrapposizione basata sullo stato corrente: ZERO
         durante gli stati in cui la musica spinge (BUILD/GROOVE/DROP/PEAK),
@@ -1817,7 +1998,11 @@ class HybridCouplesModel:
         con quella base) dove resta un accento gradito senza congelare la
         reattivita' quando serve di piu'."""
         if self.current_state in OVERLAP_PUSHING_STATES:
-            return 0.0
+            # CALM (2026-09-18): l'operatore vuole "sovrapposizioni" morbide
+            # anche con musica energica quando ha dichiarato la serata calma -
+            # 0.0 a CALM 0 (invariato), cresce con il livello. Il nero pieno
+            # e' escluso in questi stati (vedi _maybe_trigger_overlap).
+            return self._calm("overlap_push")
         if self.current_state in (State.INTRO, State.BREAK):
             return OVERLAP_PROBABILITY_INTRO_BREAK
         return OVERLAP_PROBABILITY  # RELAX
@@ -1854,9 +2039,15 @@ class HybridCouplesModel:
         puramente sul rango (favorisce le piu' intense); a p=0.0 pesa
         sull'inverso (favorisce le piu' calme); a p=0.5 tutti i pesi
         diventano uguali (scelta uniforme)."""
-        pool = TRANSITION_POOL
+        # CALM (2026-09-18): pool per livello - vedi CALM_POOL_EXCLUDE/EXTRA.
+        excluded = CALM_POOL_EXCLUDE.get(self.calm_level, ())
+        pool = [t for t in TRANSITION_POOL if t not in excluded]
+        pool += [t for t in CALM_POOL_EXTRA.get(self.calm_level, ()) if t not in pool]
         if len(pool) < 2:
             return pool[0] if pool else "Burn"
+        fixed = CALM_POOL_WEIGHTS.get(self.calm_level)
+        if fixed:
+            return random.choices(pool, weights=[fixed.get(t, 1) for t in pool], k=1)[0]
         ranks = [TRANSITION_INTENSITY_RANK.get(t, 0) for t in pool]
         rank_max = max(ranks)
         p = TRANSITION_INTENSITY_PROBABILITY.get(self.current_state, 0.5) * self._calm("transition_p")
@@ -1966,7 +2157,7 @@ class HybridCouplesModel:
         # generico venisse prima, intercetterebbe anche il ritorno, non solo l'entrata)
         if is_return and self.temp_b_scene == "wave_kick":
             self.temp_b_scene = None  # Reset temp override
-            fade_ms = self._get_fade_duration_ms()
+            fade_ms = self._cap_kick_fade(self._get_fade_duration_ms())  # CALM: passaggio veloce (2026-09-18)
             debug_log(f"[TRANS] wave_kick -> A: Fade {fade_ms}ms")
             return {
                 "type": "Fade",
@@ -2003,7 +2194,7 @@ class HybridCouplesModel:
             # invece di un pair fisso (Fade, Digital Gltch) a parte - un solo
             # posto dove il pool di transizioni e' definito.
             trans_type = self._weighted_transition()
-            fade_ms = self._get_fade_duration_ms()
+            fade_ms = self._cap_kick_fade(self._get_fade_duration_ms())  # CALM: passaggio veloce (2026-09-18)
             debug_log(f"[TRANS] wave_kick -> {trans_type} {fade_ms}ms")
             return {"type": trans_type, "duration_ms": fade_ms, "is_return": False, "kick_mode": "wave"}
 
@@ -2043,7 +2234,8 @@ class HybridCouplesModel:
         # Modulazione continua sul bass live: piu' energia = piu' veloce e piu' cut,
         # ma mai sotto una soglia minima visibile (150ms)
         bass_factor = min(1.0, max(0.0, self.last_bass / 100.0))
-        duration = max(150, int(base_duration * (1.0 - 0.3 * bass_factor) * self._calm("fade")))
+        duration = max(150, self._calm("min_transition_ms"),
+                       int(base_duration * (1.0 - 0.3 * bass_factor) * self._calm("fade")))
         cut_prob = min(0.9, base_cut_prob + 0.2 * bass_factor) * self._calm("cut")
 
         if random.random() < cut_prob:
@@ -2230,6 +2422,7 @@ class HybridCouplesModel:
             if resolved_by_arrival or resolved_by_timeout:
                 self.runup_flash_active = False
         elif (self.current_state in RUNUP_ELIGIBLE_STATES
+                and self._calm("flash") > 0  # a CALM 3 (flash=0) il flash pre-drop e' spento del tutto
                 and (current_time - self.last_runup_flash_time) > RUNUP_FLASH_COOLDOWN / self._calm("flash")
                 and self._detect_runup()):
             self.runup_flash_active = True
@@ -2300,6 +2493,13 @@ class HybridCouplesModel:
         # ====================================================================
         # 2. DEBOUNCE dinamico (dipende da stato)
         # ====================================================================
+        # CALM (2026-09-18): permanenza minima su _A/_B (vedi CALM_DWELL) - le
+        # decisioni di lasciare la scena corrente aspettano che scada, qualunque
+        # sia l'energia della musica. wave_kick ne e' escluso (lato "K").
+        self._update_calm_dwell(current_time)
+        if current_time < self.calm_dwell_until:
+            return None
+
         debounce = self._get_debounce()
         if (current_time - self.last_switch_time) < debounce:
             return None
@@ -2330,7 +2530,7 @@ class HybridCouplesModel:
         # a schermo ben oltre la permanenza minima, dominando invece di _A.
         if self.temp_b_scene == "wave_kick" and not self.in_scene_a and (intro_or_break or is_kick):
             time_on_wave = current_time - self.temp_b_scene_time if self.temp_b_scene_time > 0 else 999
-            if time_on_wave < MIN_WAVE_KICK_DWELL:
+            if time_on_wave < MIN_WAVE_KICK_DWELL * self._calm("kick_dwell"):
                 self.last_switch_time = current_time
                 return None
 
@@ -2366,7 +2566,8 @@ class HybridCouplesModel:
         # assenti, e questo e' esattamente il motivo per cui "wave_kick non
         # sempre parte". In BUILD/GROOVE (recupero da break) restiamo legati
         # a kick reali, visto che in quella fase l'energia e' gia' attiva.
-        if wave_eligible and self.in_scene_a and (intro_or_break or is_kick):
+        ab_in_calm_states = self._calm("intro_break_ab")  # CALM 3: INTRO/BREAK usano il ciclo A/B normale
+        if wave_eligible and self.in_scene_a and ((intro_or_break and not ab_in_calm_states) or is_kick):
             if self.current_state == State.INTRO:
                 # Floor alzato 0.2->0.4 (operatore: "_kick appare all'inizio
                 # di un cambio e poi basta") - decadeva troppo verso un
@@ -2388,6 +2589,7 @@ class HybridCouplesModel:
                 rise_factor = min(1.0, rise_rate / POST_BREAK_RISE_RATE_THRESHOLD)
                 prob_wave = max(0.0, rise_factor * (1.0 - recovery_progress))
 
+            prob_wave *= self._calm("kick_share")  # CALM: wave_kick raro (2026-09-18)
             if random.random() < prob_wave:
                 self.last_switch_time = current_time
 
@@ -2413,7 +2615,7 @@ class HybridCouplesModel:
                 )
                 return target_scene
 
-            if intro_or_break:
+            if intro_or_break and not ab_in_calm_states:
                 # Fase esclusiva: il kick non ha innescato wave_kick, resta su _A
                 self.last_switch_time = current_time
 
@@ -2537,7 +2739,9 @@ class HybridCouplesModel:
                 # restiamo su _A invece di passare sempre a _B. Il ritorno da
                 # _B (branch sotto) resta invece sempre immediato — asimmetria
                 # voluta per dare piu' presenza a schermo a _A rispetto a _B.
-                if random.random() >= PROB_ENTER_B_ON_KICK:
+                # CALM (2026-09-18): enter_b_boost tiene aperta l'uscita da _A a CALM alto (il
+                # ritorno da _B e' sempre immediato, l'uscita da _A no: rendeva _B ~1/3 di _A).
+                if random.random() >= min(1.0, PROB_ENTER_B_ON_KICK + self._calm("enter_b_boost")):
                     return None
 
                 # CICLO PRINCIPALE 40/30/30 (IN PROVA): non assorbito -> 3
@@ -2547,17 +2751,16 @@ class HybridCouplesModel:
                 # si comporta esattamente come l'ingresso INTRO/BREAK una
                 # volta atterrato li'. Il colore torna sulla stessa scena_A
                 # (non su _B) - e' un accento, non un vero switch.
-                # CALM "flash" (2026-09-18): il peso tolto al lampo colorato
-                # si divide meta' su "b" e meta' su wave_kick - cosi' la
+                # CALM "flash"/"kick_share" (2026-09-18): il peso tolto al lampo colorato
+                # e a wave_kick va TUTTO a scena _B (prima meta' a wave_kick: troppi kick) - cosi' la
                 # frequenza assoluta del lampo scala esattamente di
                 # calm("flash") senza ridistribuirsi su tutto il resto.
                 # Prima versione: tutto su "b"; test live CALM 3 ("mancavano
                 # un po' di cambi A/B, c'erano piu' wave e kick") ha mostrato
                 # kick/wave in calo (-27%/-8%/min) mentre le _B non calavano.
                 color_w = MAIN_CYCLE_COLOR_PROB * self._calm("flash")
-                freed = MAIN_CYCLE_COLOR_PROB - color_w
-                b_w = MAIN_CYCLE_B_PROB + freed / 2
-                wave_w = MAIN_CYCLE_WAVE_KICK_PROB + freed / 2
+                wave_w = MAIN_CYCLE_WAVE_KICK_PROB * self._calm("kick_share")
+                b_w = MAIN_CYCLE_B_PROB + (MAIN_CYCLE_COLOR_PROB - color_w) + (MAIN_CYCLE_WAVE_KICK_PROB - wave_w)
                 outcome = random.choices(
                     ["b", "wave_kick", "color"],
                     weights=[b_w, wave_w, color_w],
@@ -2739,6 +2942,11 @@ def set_calm_level(level):
     Clampato a [0,3] per sicurezza (un valore fuori range non deve rompere
     _calm())."""
     model.calm_level = max(0, min(3, level))
+
+def get_calm_value(key):
+    """Valore corrente di un asse CALM_MULTIPLIERS (vedi _calm) - per pupa.py, che deve
+    scalare comportamenti che vivono fuori dal brain (es. polso colore a schermo)."""
+    return model._calm(key)
 
 def get_calm_level():
     """Livello di CALM MODE corrente (per il print console di pupa.py)."""

@@ -56,7 +56,7 @@ Actual key bindings live in the OBS scene collection file itself (`PUPA_Control`
 
 | Source name | Type | Bound to | Behavior |
 |---|---|---|---|
-| `PUPA_CALM_0`..`PUPA_CALM_3` | 4-way exclusive | **F1 / F2 / F3 / F4** | "Mostra"-only hotkeys — the **most recently shown** wins (not the highest level), autopulizia hides the rest. See `brain.CALM_MULTIPLIERS`. |
+| `PUPA_CALM_0`..`PUPA_CALM_3` | 4-way exclusive | **F1 / F2 / F3 / F4** | "Mostra"-only hotkeys — the **most recently shown** wins (not the highest level), autopulizia hides the rest. **CALM 0 and CALM 3 are hard extremes, independent of the music** (2026-09-18): 0 = fast/cuts/flashes, 3 = slow, soft, no cuts/flashes/bursts, _A and _B alternating with minimum dwell, kick scenes rare, Fade/Displace/Blur; 1 and 2 are interpolated and untested. Level is restored from OBS at PUPA startup. All axes/tables in `brain.CALM_MULTIPLIERS` (+ `CALM_DWELL`, `CALM_POOL_*`, `CALM_OVERLAP_WEIGHTS`); `overlay_pulse` scales `pupa.py`'s on-screen kick color pulse. |
 | `PUPA_LOOP_SCENE` | binary toggle | **Ctrl+L** show, Ctrl+Shift+L hide | Freezes the current scene_A's 4min timer. |
 | `PUPA_BLACKOUT` (2026-07-30) | binary toggle | **F11** show, Shift+F11 hide | Forces monitors to `black_color` and all QLC+ channels to 0 **without stopping PUPA** — internal timers/energy-tracking freeze in place and resume exactly where they left off on toggle-off, no explicit "resume" logic. For technical pauses/mic announcements. |
 | `PUPA_LIGHTMODE_SYNC`/`_ALTERNATE`/`_INVERSE` (2026-07-30) | 3-way exclusive | **F5 / F6 / F7** show, Shift+F5/F6/F7 hide | Selects `brain.model.light_mode` — same "most recently shown wins" mechanism as CALM. `_INVERSE` starts enabled (matches the model's own default). |

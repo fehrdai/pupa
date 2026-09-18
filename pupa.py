@@ -1120,9 +1120,14 @@ def main():
                 if ambient_now != qlc_ambient_active_last[0]:
                     debug_log(f"[QLC] wash ambient {'ATTIVO' if ambient_now else 'disattivato'} (stato={brain.model.current_state.value})")
                     qlc_ambient_active_last[0] = ambient_now
+                # CALM (2026-09-18): scala/spegne il polso a SCHERMO (non i fari
+                # QLC+, che restano com'erano) - a CALM 3 e' 0, niente flash
+                # colorato a ogni kick. Vedi CALM_MULTIPLIERS["overlay_pulse"].
+                overlay_scale = brain.get_calm_value("overlay_pulse")
                 if overlay_rgb[0]:
                     if is_kick:
-                        obs.set_overlay_color(COLOR_OVERLAY_SOURCE, overlay_rgb[0], overlay_peak_pct[0])
+                        if overlay_scale > 0:
+                            obs.set_overlay_color(COLOR_OVERLAY_SOURCE, overlay_rgb[0], overlay_peak_pct[0] * overlay_scale)
                         overlay_pulse_end_time[0] = current_time + COLOR_OVERLAY_DECAY_S
                         if ambient_intensity is None:
                             r, g, b = overlay_rgb[0]
@@ -1132,7 +1137,8 @@ def main():
                         remaining = overlay_pulse_end_time[0] - current_time
                         if remaining > 0:
                             frac = remaining / COLOR_OVERLAY_DECAY_S
-                            obs.set_overlay_color(COLOR_OVERLAY_SOURCE, overlay_rgb[0], overlay_peak_pct[0] * frac)
+                            if overlay_scale > 0:
+                                obs.set_overlay_color(COLOR_OVERLAY_SOURCE, overlay_rgb[0], overlay_peak_pct[0] * frac * overlay_scale)
                             if ambient_intensity is None:
                                 r, g, b = overlay_rgb[0]
                                 scale = min(1.0, overlay_peak_pct[0] * frac / 100.0)
