@@ -52,16 +52,20 @@ Case-sensitive, exact suffix match — this is the whole naming contract.
 
 PUPA has no native "hotkey" concept over the WebSocket API — the trick (see `hotkey_controller.py`) is that the operator binds a real keyboard key, in OBS's own Settings → Hotkeys, to the **Show** action of a dedicated dummy source living in the `PUPA_Control` scene; PUPA polls that source's visibility and reacts. To add a new one: create the source in `PUPA_Control`, bind a hotkey to its "Show" (not "Show and Hide") action in OBS, and register the source name in `pupa.py`. Current sources:
 
-| Source name | Type | Behavior |
-|---|---|---|
-| `PUPA_CALM_0`..`PUPA_CALM_3` | 4-way exclusive | "Mostra"-only hotkeys — the **most recently shown** wins (not the highest level), autopulizia hides the rest. See `brain.CALM_MULTIPLIERS`. |
-| `PUPA_LOOP_SCENE` | binary toggle | Freezes the current scene_A's 4min timer. |
-| `PUPA_BLACKOUT` (2026-07-30, bound to **F11**) | binary toggle | Forces monitors to `black_color` and all QLC+ channels to 0 **without stopping PUPA** — internal timers/energy-tracking freeze in place and resume exactly where they left off on toggle-off, no explicit "resume" logic. For technical pauses/mic announcements. |
-| `PUPA_LIGHTMODE_SYNC`/`_ALTERNATE`/`_INVERSE` (2026-07-30, bound to **F5/F6/F7**) | 3-way exclusive | Selects `brain.model.light_mode` — same "most recently shown wins" mechanism as CALM. `_INVERSE` starts enabled (matches the model's own default). |
-| `PUPA_SOLO_MONITOR` (2026-07-30, bound to **F9**) | binary toggle | Forces monitors always on, lights always off — overrides `light_mode`/calm/state entirely (`brain.forced_mode`). |
-| `PUPA_SOLO_LUCI` (2026-07-30, bound to **F10**) | binary toggle | Forces lights always on, monitors always off — same override mechanism as above. If both `PUPA_SOLO_MONITOR` and `PUPA_SOLO_LUCI` end up enabled at once (shouldn't happen in normal use), `PUPA_SOLO_MONITOR` wins by fixed precedence in `pupa.py`. |
-| `PUPA_STROBE_WHITE` (bound to **F8**) | binary toggle | While active, blinks pure white on both fixtures every tick (Master, ~10Hz), overriding `light_mode`/`forced_mode`/color entirely — OBS scene transitions keep running normally, this only overrides the lights. Toggle, not a fixed-duration burst (redesigned 2026-08-01 — the original one-shot burst felt too short live, operator wanted a real on/off). |
-| `PUPA_SHUTDOWN` (2026-08-01, bound to **F12**) | one-shot | Stops PUPA gracefully from OBS instead of needing terminal focus for Ctrl+C — raises `SystemExit` from the main loop, which runs through the exact same shutdown cascade (lights off, OBS to black, disconnect) since it's a `finally` block. Added after the operator found the monitor-alternation Projector windows kept stealing focus from the terminal during a live test. |
+Actual key bindings live in the OBS scene collection file itself (`PUPA_Control`'s `libobs.show_scene_item.N`/`hide_scene_item.N` hotkey entries, one per scene item), not in code — verified 2026-09-18 by reading Linux's live collection (`tso_backup_before_scene_removal.json`, the file `user.ini` actually points `SceneCollectionFile` at, not `tso.json`). If a machine's bindings ever look wrong, that JSON is the ground truth, not this table.
+
+| Source name | Type | Bound to | Behavior |
+|---|---|---|---|
+| `PUPA_CALM_0`..`PUPA_CALM_3` | 4-way exclusive | **F1 / F2 / F3 / F4** | "Mostra"-only hotkeys — the **most recently shown** wins (not the highest level), autopulizia hides the rest. See `brain.CALM_MULTIPLIERS`. |
+| `PUPA_LOOP_SCENE` | binary toggle | **Ctrl+L** show, Ctrl+Shift+L hide | Freezes the current scene_A's 4min timer. |
+| `PUPA_BLACKOUT` (2026-07-30) | binary toggle | **F11** show, Shift+F11 hide | Forces monitors to `black_color` and all QLC+ channels to 0 **without stopping PUPA** — internal timers/energy-tracking freeze in place and resume exactly where they left off on toggle-off, no explicit "resume" logic. For technical pauses/mic announcements. |
+| `PUPA_LIGHTMODE_SYNC`/`_ALTERNATE`/`_INVERSE` (2026-07-30) | 3-way exclusive | **F5 / F6 / F7** show, Shift+F5/F6/F7 hide | Selects `brain.model.light_mode` — same "most recently shown wins" mechanism as CALM. `_INVERSE` starts enabled (matches the model's own default). |
+| `PUPA_SOLO_LUCI` (2026-07-30) | binary toggle | **F9** show, Shift+F9 hide | Forces lights always on, monitors always off — overrides `light_mode`/calm/state entirely (`brain.forced_mode`). |
+| `PUPA_SOLO_MONITOR` (2026-07-30) | binary toggle | **F10** show, Shift+F10 hide | Forces monitors always on, lights always off — same override mechanism as above. If both `PUPA_SOLO_MONITOR` and `PUPA_SOLO_LUCI` end up enabled at once (shouldn't happen in normal use), `PUPA_SOLO_MONITOR` wins by fixed precedence in `pupa.py`. |
+| `PUPA_STROBE_WHITE` | binary toggle | **F8** show, Shift+F8 hide | While active, blinks pure white on both fixtures every tick (Master, ~10Hz), overriding `light_mode`/`forced_mode`/color entirely — OBS scene transitions keep running normally, this only overrides the lights. Toggle, not a fixed-duration burst (redesigned 2026-08-01 — the original one-shot burst felt too short live, operator wanted a real on/off). |
+| `PUPA_SHUTDOWN` (2026-08-01) | one-shot | **F12** show, Shift+F12 hide | Stops PUPA gracefully from OBS instead of needing terminal focus for Ctrl+C — raises `SystemExit` from the main loop, which runs through the exact same shutdown cascade (lights off, OBS to black, disconnect) since it's a `finally` block. Added after the operator found the monitor-alternation Projector windows kept stealing focus from the terminal during a live test. |
+
+**Correction 2026-09-18**: this table previously had `PUPA_SOLO_MONITOR`/`PUPA_SOLO_LUCI` swapped (said F9/monitor, F10/luci) — the live Linux binding is F9/luci, F10/monitor, now fixed above. `PUPA_CALM_0`..`_3`'s F1-F4 binding was missing entirely, also added.
 
 ### What's still NOT discoverable from OBS (creative/curatorial, stays hardcoded or config-driven)
 

@@ -107,15 +107,21 @@ class OBSController:
     def get_current_scene(self):
         """Get current program scene name"""
         response = self.client.get_scene_list()
-        
+
         # Handle obsws_python response structure
         if hasattr(response, 'currentProgramSceneName'):
             self.current_scene = response.currentProgramSceneName
         elif hasattr(response, 'current_program_scene_name'):
             self.current_scene = response.current_program_scene_name
-        else:
+        elif response is not None:
             self.current_scene = response.get('currentProgramSceneName', 'Unknown')
-        
+        else:
+            # 2026-09-12: get_scene_list() puo' tornare None invece di sollevare
+            # (visto dal vivo durante lo shutdown - probabile finestra di
+            # transizione della connessione), causava un crash secco su
+            # response.get(...) proprio nel passo "OBS a nero" di fine show.
+            self.current_scene = 'Unknown'
+
         return self.current_scene
     
     def switch_scene(self, scene_name, transition_ms=None, transition_type="Fade"):

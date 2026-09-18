@@ -165,6 +165,18 @@ class AudioAnalyzer:
         self.is_kick = False
         self.is_drop = False
         self.is_break = False
+        # 2026-09-12: is_kick sopra e' un livello istantaneo, sovrascritto ad
+        # ogni blocco audio (~46ms) dal callback - ma get_metrics() viene
+        # interrogato da un loop indipendente (~50ms in pupa.py, spesso di
+        # piu' per via delle chiamate di rete OBS/QLC+ nello stesso giro) non
+        # sincronizzato con quello. Un kick vero rilevato correttamente puo'
+        # tornare a False PRIMA che pupa.py arrivi a leggerlo - perso in modo
+        # imprevedibile, non per soglia sbagliata (trovato dal vivo: gap tra
+        # KICK consecutivi nel log sotto i 100ms, troppo corti per essere
+        # battute vere - sintomo di campionamento, non di rilevamento).
+        # _kick_pending resta True finche' get_metrics() non lo consuma,
+        # cosi' nessun kick vero puo' sparire tra due letture.
+        self._kick_pending = False
 
         # Stima BPM (vedi costanti sopra)
         self.kick_intervals = deque(maxlen=self.BPM_HISTORY_SIZE)
@@ -417,6 +429,7 @@ class AudioAnalyzer:
             if self.last_kick_time > 0:
                 self._update_bpm((current_time_ms - self.last_kick_time) / 1000.0)
             self.is_kick = True
+            self._kick_pending = True
             self.last_kick_time = current_time_ms
             self._correct_beat_phase(now)
         else:
@@ -505,6 +518,9 @@ class AudioAnalyzer:
                     "bass_avg_long": 0,
                 }
 
+            kick_consumed = self._kick_pending
+            self._kick_pending = False
+
             return {
                 "bass": self.bass_history[-1],
                 "mid": self.mid_history[-1],
@@ -517,7 +533,11 @@ class AudioAnalyzer:
                 # prolungato, usato da brain.py come segnale di break piu'
                 # robusto (vedi BREAK_LONG_FLOOR_PCT).
                 "bass_avg_long": np.mean(list(self.bass_history_long)[-30:]) if self.bass_history_long else 0,
-                "is_kick": self.is_kick,
+                # Consuma _kick_pending (vedi __init__, gia' dentro self.lock
+                # qui) invece di leggere il livello istantaneo self.is_kick -
+                # garantisce che un kick vero rilevato tra due letture non
+                # sparisca mai in silenzio.
+                "is_kick": kick_consumed,
                 "is_drop": self.is_drop,
                 "is_break": self.is_break,
                 "db_level": self.db_level,

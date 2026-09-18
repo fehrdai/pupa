@@ -45,19 +45,22 @@ _DEFAULT_COUPLES = {
     "montezuma_A":   ["psicodance_B"],
     "mri_A":         ["segnali_B"],
 }
-# POOL CONDIVISO (2026-07-?? Fase 2, operatore): stesso pool per OGNI
-# scena_A invece di pool dedicati diversi per coppia - stessa filosofia
-# gia' usata per ALL_B_SCENES/STROBE_COLOR_POOL, non piu' una curatela
-# per-coppia. Fractal/Plasma non sono piu' firme d'identita' esclusive
-# (vedi _DEFAULT_IDENTITY_SETS sotto), Digital Gltch entra qui invece di
-# essere solo per l'ingresso wave_kick (che ora riusa questo stesso pool).
-_SHARED_COUPLE_TRANSITIONS_POOL = ["Burn", "Displace", "Digital Gltch", "Plasma", "Blur"]
-_DEFAULT_COUPLE_TRANSITIONS = {
-    "montezuma_A": list(_SHARED_COUPLE_TRANSITIONS_POOL),
-    "kusanagi_A": list(_SHARED_COUPLE_TRANSITIONS_POOL),
-    "mri_A": list(_SHARED_COUPLE_TRANSITIONS_POOL),
-    "futureflash_A": list(_SHARED_COUPLE_TRANSITIONS_POOL),
-}
+# POOL DI TRANSIZIONI: 2026-09-18, slegato del tutto dalla scena_A attiva
+# (operatore: "le transizioni... dovrebbe essere legato al livello
+# energetico e allo stato di calma selezionato, non piu alle scene
+# presenti"). Prima era un dict per-coppia (COUPLE_TRANSITIONS) che in
+# teoria era gia' pensato come "stesso pool per ognuna" ma in pratica era
+# driftato su Linux a pool diversi e sparsi per coppia (drift di config,
+# mai piu' riallineato) - un solo pool globale elimina la possibilita'
+# stessa che succeda di nuovo. Chi sceglie il tipo resta _weighted_
+# transition(): rank + TRANSITION_INTENSITY_PROBABILITY dello stato
+# corrente, invariati.
+# 2026-09-18, Fase 2: pool allargato con Digital Glitch (nome corretto,
+# vedi TRANSITION_INTENSITY_RANK) e Luma Wipe (entrambe presenti in OBS,
+# vedi verifica sul file di scena live). Stinger escluso di proposito
+# (operatore: "stinger rimane fuori"), Plasma escluso perche' non esiste
+# ancora come transizione in OBS.
+_DEFAULT_TRANSITION_POOL = ["Burn", "Blur", "Displace", "Digital Glitch", "Luma Wipe"]
 _DEFAULT_SPECIAL_SCENES = {"wave_kick": "wave_kick", "strobo": "white_color", "black": "black_color"}
 _DEFAULT_STROBE_COLOR_POOL = ["white_color", "red_color", "blue_color", "green_color"]
 # IDENTITA' (vedi scenes_config.yaml per la spiegazione): bundle fissi
@@ -87,10 +90,12 @@ SCENES_CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "s
 
 
 def _load_scenes_config(path=SCENES_CONFIG_PATH):
-    """Carica coppie/transizioni/scene speciali/pool colori/identita' da
+    """Carica coppie/pool transizioni/scene speciali/pool colori/identita' da
     scenes_config.yaml. Fallback ai valori hardcoded sopra se il file manca,
-    e' invalido, o pyyaml non e' installato - nessuna rottura per chi non lo tocca."""
-    defaults = (dict(_DEFAULT_COUPLES), dict(_DEFAULT_COUPLE_TRANSITIONS),
+    e' invalido, o pyyaml non e' installato - nessuna rottura per chi non lo tocca.
+    Il pool di transizioni (`transition_pool`) e' UNICO e globale, non piu'
+    per-coppia - vedi _DEFAULT_TRANSITION_POOL."""
+    defaults = (dict(_DEFAULT_COUPLES), list(_DEFAULT_TRANSITION_POOL),
                 dict(_DEFAULT_SPECIAL_SCENES), list(_DEFAULT_STROBE_COLOR_POOL),
                 [dict(s) for s in _DEFAULT_IDENTITY_SETS],
                 [list(d) for d in _DEFAULT_META_PAIR_DUOS])
@@ -101,7 +106,7 @@ def _load_scenes_config(path=SCENES_CONFIG_PATH):
         with open(path, "r", encoding="utf-8") as f:
             data = yaml.safe_load(f) or {}
         couples = data.get("couples") or _DEFAULT_COUPLES
-        transitions = data.get("couple_transitions") or _DEFAULT_COUPLE_TRANSITIONS
+        transitions = data.get("transition_pool") or _DEFAULT_TRANSITION_POOL
         special = data.get("special_scenes") or _DEFAULT_SPECIAL_SCENES
         color_pool = data.get("strobe_color_pool") or _DEFAULT_STROBE_COLOR_POOL
         identity_sets = data.get("identity_sets") or _DEFAULT_IDENTITY_SETS
@@ -120,7 +125,7 @@ def _load_scenes_config(path=SCENES_CONFIG_PATH):
 # Caricato da scenes_config.yaml (vedi _load_scenes_config), con fallback
 # hardcoded. Filtrato poi da validate_scenes() contro le scene REALMENTE
 # presenti in OBS - vedi sotto.
-COUPLES, COUPLE_TRANSITIONS, SPECIAL_SCENES, STROBE_COLOR_POOL, IDENTITY_SETS, META_PAIR_DUOS = _load_scenes_config()
+COUPLES, TRANSITION_POOL, SPECIAL_SCENES, STROBE_COLOR_POOL, IDENTITY_SETS, META_PAIR_DUOS = _load_scenes_config()
 
 # POOL CONDIVISO di tutte le scene_B (ristrutturazione 2026-07-15: prima
 # ogni scena_A pescava SOLO dal proprio pool in COUPLES, ora _select_b_scene
@@ -238,9 +243,9 @@ def discover_and_merge_config(available_scenes, all_inputs, scene_item_names, pa
         except Exception as e:
             debug_log(f"[CONFIG] scrittura di {path} fallita: {e}")
 
-    global COUPLES, COUPLE_TRANSITIONS, SPECIAL_SCENES, STROBE_COLOR_POOL, IDENTITY_SETS, META_PAIR_DUOS
+    global COUPLES, TRANSITION_POOL, SPECIAL_SCENES, STROBE_COLOR_POOL, IDENTITY_SETS, META_PAIR_DUOS
     global ALL_B_SCENES, STROBE_SCENE, BLACK_PAUSE_SCENE
-    COUPLES, COUPLE_TRANSITIONS, SPECIAL_SCENES, STROBE_COLOR_POOL, IDENTITY_SETS, META_PAIR_DUOS = _load_scenes_config(path)
+    COUPLES, TRANSITION_POOL, SPECIAL_SCENES, STROBE_COLOR_POOL, IDENTITY_SETS, META_PAIR_DUOS = _load_scenes_config(path)
     ALL_B_SCENES = _compute_all_b_scenes()
     STROBE_SCENE = SPECIAL_SCENES.get("strobo", "white_color")
     BLACK_PAUSE_SCENE = SPECIAL_SCENES.get("black", "black_color")
@@ -290,19 +295,27 @@ DEGENERATE_SCENE = None
 META_COUPLE_DURATION_MIN = 900   # 15 minuti
 META_COUPLE_DURATION_MAX = 1500  # 25 minuti
 
-# Pool di transizioni "di coppia" per il ciclo energetico A<->B (COUPLE_TRANSITIONS,
-# caricato sopra da scenes_config.yaml). STESSA pool usata per ENTRAMBE le
-# direzioni (A->B e B->A), scelta randomica. Fade escluso di proposito:
-# riservato alla fase INTRO/BREAK e al ritorno da wave_kick, per evitare che
-# domini percettivamente il ciclo principale (problema gia' riscontrato).
+# Pool di transizioni per il ciclo energetico A<->B (TRANSITION_POOL, caricato
+# sopra da scenes_config.yaml) - UNICO per tutta la sessione, non piu' legato
+# a quale coppia/scena_A e' attiva (vedi nota 2026-09-18 su _DEFAULT_
+# TRANSITION_POOL). STESSA pool usata per ENTRAMBE le direzioni (A->B e
+# B->A), scelta randomica. Fade escluso di proposito: riservato alla fase
+# INTRO/BREAK e al ritorno da wave_kick, per evitare che domini percettivamente
+# il ciclo principale (problema gia' riscontrato).
 
-# Transizioni PREVALENTI per stato (non univoche): invece di scegliere 50/50
-# tra le 2 transizioni del pool di ogni coppia, si pesa verso quella piu'
-# "intensa" (Displace > Burn > Blur) o quella piu' calma a seconda dello
-# stato corrente. Mantiene la personalizzazione per coppia (i pool sopra
-# restano quelli), aggiunge solo un carattere riconoscibile per stato senza
-# diventare meccanico/prevedibile (mai il 100%, sempre un po' di varieta').
-TRANSITION_INTENSITY_RANK = {"Digital Gltch": 4, "Plasma": 4, "Displace": 3, "Burn": 2, "Blur": 1}
+# Transizioni PREVALENTI per stato (non univoche): invece di scegliere
+# uniformemente tra le transizioni del pool, si pesa verso quella piu'
+# "intensa" (rank piu' alto) o piu' calma a seconda dello stato corrente
+# (energia audio) - non piu' della coppia attiva. Mai il 100%, sempre un po'
+# di varieta'.
+# 2026-09-18: "Digital Gltch" corretto in "Digital Glitch" - era il nome
+# SBAGLIATO rispetto alla transizione reale in OBS, quindi veniva scartata in
+# silenzio da validate_scenes() ogni volta, mai scelta una sola volta.
+# "Plasma" rimossa: non esiste come transizione in OBS (mai creata, andrebbe
+# costruita come shader Shadertastic prima di poterla usare). "Luma Wipe"
+# aggiunta, rank basso/calmo su richiesta esplicita (piu' presenza negli
+# stati lenti).
+TRANSITION_INTENSITY_RANK = {"Digital Glitch": 4, "Displace": 3, "Burn": 2, "Blur": 1, "Luma Wipe": 1}
 TRANSITION_INTENSITY_PROBABILITY = {
     State.BUILD:  0.65,  # tensione in crescita -> pende verso il piu' dinamico
     State.GROOVE: 0.55,  # ritmo stabile -> leggero sbilanciamento dinamico
@@ -423,15 +436,33 @@ BLACK_PAUSE_HOLD = (1.5, 3.5)  # secondi di nero
 #      spenti" e "piu' luci accese" sono gia' la STESSA cosa per costruzione
 #      (get_light_outputs deriva le luci dal monitor), quindi non serve
 #      nessun terzo asse dedicato alle luci.
+# 2026-09-18: 9° asse, "transition_p" - moltiplica la p usata da
+# _weighted_transition() per scegliere il TIPO di transizione (vedi
+# TRANSITION_INTENSITY_PROBABILITY). Prima CALM non toccava il tipo per
+# niente, solo cut/fade/durata - un cut raro a CALM 3 finiva comunque per
+# scegliere tra le transizioni pesate SOLO sullo stato audio, che a DROP/PEAK
+# restano sbilanciate verso le piu' intense anche se il VJ ha dichiarato la
+# serata calma. Stessa curva ripida di "cut" - a calm_level alto, la scelta
+# del tipo dipende quasi solo dal calm, non piu' dallo stato istantaneo.
+#
+# 2026-09-18, stessa sera: 10° asse, "debounce" - BUG REALE trovato dal vivo
+# (operatore, test CALM 3 con dub techno: "c'e' troppa rapidita' ancora tra
+# un cambio scena ed un altro"). _get_debounce() (il tempo MINIMO tra due
+# cambi scena nel ciclo A<->B) dipendeva SOLO da STATE_PARAMS[stato], MAI da
+# calm_level - gli altri 9 assi rendono un cambio piu' lento/calmo/nero una
+# volta che succede, ma non toccano QUANTO SPESSO succede. Curva piu' ripida
+# di tutte le altre (fino a x8) perche' e' esattamente l'asse che l'operatore
+# ha segnalato come mancante - "quasi tutto fermo" a CALM 3 richiede secondi
+# reali tra un cambio e l'altro, non 0.3-0.4s (debounce base di GROOVE/BUILD).
 CALM_MULTIPLIERS = {
     0: {"cut": 1.0,  "fade": 1.0, "black_prob": 1.0, "black_hold": 1.0, "burst_len": 1.0,
-        "monitor_bars": 1.0, "breather_prob": 1.0, "breather_off_bias": 0.0},
+        "monitor_bars": 1.0, "breather_prob": 1.0, "breather_off_bias": 0.0, "transition_p": 1.0, "debounce": 1.0},
     1: {"cut": 0.55, "fade": 1.25, "black_prob": 1.4, "black_hold": 1.2, "burst_len": 0.7,
-        "monitor_bars": 1.3, "breather_prob": 1.3, "breather_off_bias": 0.10},
+        "monitor_bars": 1.3, "breather_prob": 1.3, "breather_off_bias": 0.10, "transition_p": 0.55, "debounce": 2.0},
     2: {"cut": 0.25, "fade": 1.6, "black_prob": 2.0, "black_hold": 1.6, "burst_len": 0.4,
-        "monitor_bars": 1.8, "breather_prob": 1.6, "breather_off_bias": 0.25},
+        "monitor_bars": 1.8, "breather_prob": 1.6, "breather_off_bias": 0.25, "transition_p": 0.25, "debounce": 4.0},
     3: {"cut": 0.05, "fade": 2.2, "black_prob": 2.8, "black_hold": 2.2, "burst_len": 0.15,
-        "monitor_bars": 2.5, "breather_prob": 2.0, "breather_off_bias": 0.45},
+        "monitor_bars": 2.5, "breather_prob": 2.0, "breather_off_bias": 0.45, "transition_p": 0.05, "debounce": 8.0},
 }
 CALM_BLACK_PAUSE_PROB_CAP = 0.9  # non deve mai diventare "quasi sempre nero"
 CALM_BREATHER_PROB_CAP = 0.9  # stesso principio, per il respiro monitor/luci
@@ -1777,41 +1808,45 @@ class HybridCouplesModel:
         return OVERLAP_PROBABILITY  # RELAX
 
     def _get_debounce(self):
-        """Ritorna debounce basato su stato corrente
+        """Ritorna debounce basato su stato corrente, scalato da CALM MODE
+        (2026-09-18 - vedi CALM_MULTIPLIERS["debounce"]).
 
         BREAK e' reattivo alla velocita' del crollo bass: un break brusco
         (bass scende rapidamente) riduce il debounce fino al 70%, un break
-        lento (calo graduale) resta sul debounce base.
+        lento (calo graduale) resta sul debounce base. Il moltiplicatore CALM
+        si applica DOPO questa riduzione, non prima - a CALM alto anche un
+        break brusco resta comunque piu' lento del default a calm_level=0.
         """
         base = STATE_PARAMS[self.current_state]["debounce"]
         if self.current_state == State.BREAK:
             drop_rate = max(0.0, self.last_bass_avg - self.last_bass)
             drop_factor = min(1.0, drop_rate / 30.0)
-            return max(0.3, base * (1.0 - 0.7 * drop_factor))
-        return base
+            base = max(0.3, base * (1.0 - 0.7 * drop_factor))
+        return base * self._calm("debounce")
 
-    def _weighted_couple_transition(self, couple_pool):
-        """Sceglie UNA transizione tra TUTTE quelle del pool (non piu' solo
-        le 2 estreme per rango - 2026-07-?? Fase 2, operatore: un pool
-        condiviso a 5+ membri con la vecchia meccanica a 2 estremi ne
-        sprecava sempre 3, mai scelte), pesando verso quelle piu' "intense"
-        (rank piu' alto in TRANSITION_INTENSITY_RANK) o piu' "calme" a
-        seconda dello stato corrente.
+    def _weighted_transition(self):
+        """Sceglie UNA transizione tra TUTTE quelle di TRANSITION_POOL (pool
+        unico globale, 2026-09-18 - non piu' legato a quale coppia/scena_A
+        e' attiva), pesando verso quelle piu' "intense" (rank piu' alto in
+        TRANSITION_INTENSITY_RANK) o piu' "calme" a seconda dello stato
+        corrente E del CALM MODE attivo.
 
         Blend continuo: peso_i = p*rank_i + (1-p)*(rank_max+1-rank_i), dove
-        p = TRANSITION_INTENSITY_PROBABILITY dello stato corrente. A p=1.0
-        pesa puramente sul rango (favorisce le piu' intense); a p=0.0 pesa
+        p = TRANSITION_INTENSITY_PROBABILITY dello stato corrente, scalata da
+        self._calm("transition_p") - a calm_level alto p viene tirata verso 0
+        (favorisce le calme) A PRESCINDERE da quanto e' energico lo stato
+        istantaneo, stessa filosofia gia' usata per cut/fade. A p=1.0 pesa
+        puramente sul rango (favorisce le piu' intense); a p=0.0 pesa
         sull'inverso (favorisce le piu' calme); a p=0.5 tutti i pesi
-        diventano uguali (scelta uniforme) - stesso comportamento di prima
-        nei 3 casi limite, ma ora su tutto il pool invece che su 2 estremi
-        fissi."""
-        if len(couple_pool) < 2:
-            return couple_pool[0] if couple_pool else "Burn"
-        ranks = [TRANSITION_INTENSITY_RANK.get(t, 0) for t in couple_pool]
+        diventano uguali (scelta uniforme)."""
+        pool = TRANSITION_POOL
+        if len(pool) < 2:
+            return pool[0] if pool else "Burn"
+        ranks = [TRANSITION_INTENSITY_RANK.get(t, 0) for t in pool]
         rank_max = max(ranks)
-        p = TRANSITION_INTENSITY_PROBABILITY.get(self.current_state, 0.5)
+        p = TRANSITION_INTENSITY_PROBABILITY.get(self.current_state, 0.5) * self._calm("transition_p")
         weights = [p * r + (1 - p) * (rank_max + 1 - r) for r in ranks]
-        return random.choices(couple_pool, weights=weights, k=1)[0]
+        return random.choices(pool, weights=weights, k=1)[0]
 
     def _get_fade_duration_ms(self):
         """Durata del Fade reattiva all'energia live: corto/veloce se il bass
@@ -1949,11 +1984,10 @@ class HybridCouplesModel:
         # altro Fade nel codice, invece di un numero fisso slegato.
         if self.temp_b_scene == "wave_kick":
             # 2026-07-?? (operatore): riusa lo stesso pool/meccanismo pesato
-            # del ciclo principale (COUPLE_TRANSITIONS + _weighted_couple_
-            # transition) invece di un pair fisso (Fade, Digital Gltch) a
-            # parte - un solo posto dove il pool di transizioni e' definito.
-            couple_pool = COUPLE_TRANSITIONS.get(self.current_couple_a, ["Burn", "Displace"])
-            trans_type = self._weighted_couple_transition(couple_pool)
+            # del ciclo principale (TRANSITION_POOL + _weighted_transition)
+            # invece di un pair fisso (Fade, Digital Gltch) a parte - un solo
+            # posto dove il pool di transizioni e' definito.
+            trans_type = self._weighted_transition()
             fade_ms = self._get_fade_duration_ms()
             debug_log(f"[TRANS] wave_kick -> {trans_type} {fade_ms}ms")
             return {"type": trans_type, "duration_ms": fade_ms, "is_return": False, "kick_mode": "wave"}
@@ -1988,7 +2022,6 @@ class HybridCouplesModel:
 
         # Ciclo energetico principale: stessa pool random per A->B e B->A,
         # con Cut integrato a probabilita' crescente con l'energia (stato + bass live)
-        couple_pool = COUPLE_TRANSITIONS.get(self.current_couple_a, ["Burn", "Displace"])
         base_duration = CYCLE_TRANSITION_DURATION_MS.get(self.current_state, 800)
         base_cut_prob = CUT_PROBABILITY_BY_STATE.get(self.current_state, 0.2)
 
@@ -2001,7 +2034,7 @@ class HybridCouplesModel:
         if random.random() < cut_prob:
             trans_type = "Taglio"
         else:
-            trans_type = self._weighted_couple_transition(couple_pool)
+            trans_type = self._weighted_transition()
 
         direction = "B->A" if is_return else "A->B"
         debug_log(f"[TRANS] {direction} ciclo {self.current_couple_a}: {trans_type} {duration}ms "
@@ -2452,8 +2485,17 @@ class HybridCouplesModel:
             # raffiche blu nella stessa sessione, ma il blu restava l'unico
             # colore percepito). Fallback al colore di stato se la scena_A non
             # ha un colore identitario valido (vedi _trigger_strobe/alt_scene).
+            #
+            # 2026-09-18 (operatore): "flash colorati... in diminuzione
+            # progressiva da 0 a 3, nel calm3 solo in caso di drop" - la
+            # diminuzione progressiva c'era gia' (self._calm("cut")), manca
+            # il vincolo su CALM 3: sotto, scattava su QUALUNQUE kick mentre
+            # lo stato era DROP/PEAK, non solo sul drop vero e proprio
+            # (is_drop, il flag dedicato gia' esistente per l'evento preciso).
+            # A calm_level 0-2 nessun cambio (comportamento gia' buono).
             burst_prob = STROBE_BURST_PROBABILITY.get(self.current_state, 0.0) * self._calm("cut")
-            if burst_prob > 0 and random.random() < burst_prob:
+            calm3_drop_only = self.calm_level >= 3 and not is_drop
+            if burst_prob > 0 and not calm3_drop_only and random.random() < burst_prob:
                 calm_burst_count = max(1, round(STROBE_BURST_COUNT * self._calm("burst_len")))
                 self._trigger_strobe(current_scene, calm_burst_count * 2,
                                       alt_scene=self._get_identity().get("color"),
@@ -2747,15 +2789,16 @@ def _find_fallback_transition(available_transitions):
 
 
 def validate_scenes(available_scenes, available_transitions):
-    """Filtra COUPLES/COUPLE_TRANSITIONS contro le scene/transizioni
+    """Filtra COUPLES/TRANSITION_POOL contro le scene/transizioni
     REALMENTE presenti in OBS. Va chiamata da pupa.py subito dopo la
     connessione (prima di initialize_model).
 
     - Scene_A non trovate in OBS: la coppia intera viene rimossa
     - Scene_B mancanti: tolte dal pool della coppia (la coppia resta se ne
       sopravvive almeno una)
-    - Transizioni mancanti nel pool di una coppia: sostituite con un
-      fallback nativo OBS (Cut/Fade)
+    - TRANSITION_POOL: transizioni mancanti in OBS tolte dal pool globale
+      (unico per tutte le coppie, non piu' per-coppia - 2026-09-18); se resta
+      vuoto, fallback a un singolo nativo OBS (Cut/Fade)
     - Se alla fine non sopravvive nessuna coppia, o resta una sola scena in
       tutto: attiva DEGENERATE_MODE (vedi decide_next_scene), pupa lampeggia
       sulla stessa scena invece di alternare A/B.
@@ -2764,14 +2807,13 @@ def validate_scenes(available_scenes, available_transitions):
     - BLACK_PAUSE_SCENE non trovata: pausa nera disattivata (probabilita' a
       zero) invece di tentare switch a vuoto verso una scena inesistente.
     """
-    global COUPLES, COUPLE_TRANSITIONS, DEGENERATE_MODE, STROBE_COLOR_POOL, BLACK_PAUSE_PROBABILITY, IDENTITY_SETS, ALL_B_SCENES, META_PAIR_DUOS
+    global COUPLES, TRANSITION_POOL, DEGENERATE_MODE, STROBE_COLOR_POOL, BLACK_PAUSE_PROBABILITY, IDENTITY_SETS, ALL_B_SCENES, META_PAIR_DUOS
 
     available_scenes_set = set(available_scenes)
     available_transitions = list(available_transitions)
     fallback_trans = _find_fallback_transition(available_transitions)
 
     filtered_couples = {}
-    filtered_transitions = {}
     for a_scene, b_pool in COUPLES.items():
         if a_scene not in available_scenes_set:
             debug_log(f"[VALIDATE] {a_scene} non trovata in OBS, coppia rimossa")
@@ -2784,16 +2826,16 @@ def validate_scenes(available_scenes, available_transitions):
             debug_log(f"[VALIDATE] {a_scene}: pool_B ridotto a {available_b} (mancava/mancavano {set(b_pool) - set(available_b)})")
         filtered_couples[a_scene] = available_b
 
-        trans_pool = COUPLE_TRANSITIONS.get(a_scene, [])
-        available_trans = [t for t in trans_pool if t in available_transitions]
-        if not available_trans:
-            debug_log(f"[VALIDATE] {a_scene}: nessuna transizione del pool {trans_pool} disponibile, fallback a '{fallback_trans}'")
-            available_trans = [fallback_trans]
-        filtered_transitions[a_scene] = available_trans
-
     COUPLES = filtered_couples
-    COUPLE_TRANSITIONS = filtered_transitions
     ALL_B_SCENES = _compute_all_b_scenes()  # ricalcolato sul COUPLES appena filtrato, vedi commento sopra la sua definizione
+
+    available_trans_pool = [t for t in TRANSITION_POOL if t in available_transitions]
+    if not available_trans_pool:
+        debug_log(f"[VALIDATE] nessuna transizione di TRANSITION_POOL {TRANSITION_POOL} disponibile, fallback a '{fallback_trans}'")
+        available_trans_pool = [fallback_trans]
+    elif len(available_trans_pool) < len(TRANSITION_POOL):
+        debug_log(f"[VALIDATE] TRANSITION_POOL ridotto a {available_trans_pool} (mancava/mancavano {set(TRANSITION_POOL) - set(available_trans_pool)})")
+    TRANSITION_POOL = available_trans_pool
 
     # META_PAIR_DUOS: toglie dai duo le scene_A rimosse sopra (non in
     # COUPLES) - un duo con 1 sola scena_A superstite resta cosi' com'e'
@@ -2861,5 +2903,5 @@ def validate_scenes(available_scenes, available_transitions):
         filtered_sets.append(fixed_entry)
     IDENTITY_SETS = filtered_sets
 
-    return {"couples": COUPLES, "couple_transitions": COUPLE_TRANSITIONS, "degenerate": DEGENERATE_MODE,
+    return {"couples": COUPLES, "transition_pool": TRANSITION_POOL, "degenerate": DEGENERATE_MODE,
             "strobe_color_pool": STROBE_COLOR_POOL, "black_pause_enabled": BLACK_PAUSE_PROBABILITY > 0}

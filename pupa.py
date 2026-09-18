@@ -18,7 +18,16 @@ from audio_analyzer import AudioAnalyzer
 import brain
 import scene_discovery
 from logger import setup_logger
-from debug_logger import debug as debug_log
+from debug_logger import debug as debug_log, setup_debug_logger
+
+# Log dedicato SOLO alle luci (2026-09-12, operatore: "fammi un log delle
+# luci"), separato da debug.log - quello e' pieno di rumore video/brain
+# (TRANS/decisioni scena) che rende impossibile leggere la sequenza reale
+# di cosa arriva a QLC+. Stesso meccanismo gia' usato per exhibition/
+# slideshow (name+log_dir dedicati), qui pero' resta nella cartella logs/
+# principale (non un modulo gemello separato, solo un file diverso).
+_lights_logger = setup_debug_logger(name="pupa_lights_debug", log_file="lights.log")
+lights_log = _lights_logger.debug
 from runtime_monitor import RuntimeMonitor
 from window_manager import get_window_manager
 from hotkey_controller import MultiLevelControl, BinaryControl
@@ -316,6 +325,10 @@ def _qlc_set_rgb_both(qlc, r, g, b, current_time):
     qlc.set_channel(QLC_CHANNEL_F2_R, int(r * scale_2))
     qlc.set_channel(QLC_CHANNEL_F2_G, int(g * scale_2))
     qlc.set_channel(QLC_CHANNEL_F2_B, int(b * scale_2))
+    lights_log(f"RGB rgb_logico=({r},{g},{b}) gate={gate} scale1={scale_1} scale2={scale_2} "
+               f"F1=({int(r*scale_1)},{int(g*scale_1)},{int(b*scale_1)}) "
+               f"F2=({int(r*scale_2)},{int(g*scale_2)},{int(b*scale_2)}) "
+               f"wave={_qlc_last_wave_scene_showing[0]} light_mode={brain.model.light_mode}")
 
 # OVERLAY NERO (2026-07-17): "stessa logica del colore ma piu' lenta" -
 # stessa sorgente condivisa nidificata (black_overlay, sopra color_overlay
@@ -572,6 +585,15 @@ def main():
     # l'istanziazione. Vedi hotkey_controller.py per il "perche'" del design.
     calm_control = MultiLevelControl("Calm mode", CALM_CONTROL_SCENE, CALM_LEVEL_SOURCES)
     calm_control.resolve(obs, scenes)
+    # 2026-09-18: stessa fix gia' fatta per light_mode (vedi resolved_level in
+    # hotkey_controller.py) - senza questa riga, un CALM_N lasciato acceso in
+    # OBS da una sessione precedente veniva ignorato in silenzio, il modello
+    # ripartiva sempre a calm_level=0 finche' l'operatore non ripremeva
+    # l'hotkey. Bug reale, trovato dal vivo il 2026-09-18 (OBS mostrava
+    # ancora CALM_3 da un test precedente).
+    if calm_control.active:
+        brain.set_calm_level(calm_control.resolved_level)
+        print(f"[PUPA] Calm mode ripristinato da OBS: {brain.get_calm_level()}")
 
     # Indicatore a video del livello (CALM_LEVEL_TEXT dentro PUPA_Control,
     # mai in onda - "verifica a video di quale stato sia attivo?", visibile
@@ -581,7 +603,7 @@ def main():
         and obs.get_source_item_id(CALM_CONTROL_SCENE, CALM_LEVEL_TEXT_SOURCE) is not None
     )
     if calm_text_available:
-        obs.set_input_text(CALM_LEVEL_TEXT_SOURCE, "CALM: 0")
+        obs.set_input_text(CALM_LEVEL_TEXT_SOURCE, f"CALM: {brain.get_calm_level()}")
 
     loop_scene_control = BinaryControl("Loop scena", CALM_CONTROL_SCENE, LOOP_SCENE_SOURCE)
     loop_scene_control.resolve(obs, scenes)
@@ -592,6 +614,14 @@ def main():
 
     light_mode_control = MultiLevelControl("Modalita luci", CALM_CONTROL_SCENE, LIGHT_MODE_SOURCES)
     light_mode_control.resolve(obs, scenes)
+    # 2026-09-12: sincronizza SUBITO brain.model.light_mode con quello che
+    # OBS mostra gia' selezionato (vedi resolved_level in hotkey_controller.py)
+    # - senza questo, ogni riavvio di PUPA tornava silenziosamente al default
+    # "inverse" anche con "alternate" ancora evidenziato in OBS da un F6
+    # precedente, un disallineamento reale scoperto dal vivo stasera.
+    if light_mode_control.active:
+        brain.set_light_mode(LIGHT_MODE_NAMES.get(light_mode_control.resolved_level, "inverse"))
+        print(f"[PUPA] Modalita luci ripristinata da OBS: {brain.model.light_mode}")
 
     solo_monitor_control = BinaryControl("Solo monitor", CALM_CONTROL_SCENE, SOLO_MONITOR_SOURCE)
     solo_monitor_control.resolve(obs, scenes)
@@ -1048,6 +1078,7 @@ def main():
                     qlc.set_channel(QLC_CHANNEL_F1_MASTER, target_master)
                     qlc.set_channel(QLC_CHANNEL_F2_MASTER, target_master)
                     qlc_master_strobe_last[0] = target_master
+                    lights_log(f"MASTER -> {target_master}")
 
                 # OVERLAY COLORE: al cambio identita' (rotazione coppia),
                 # decide il colore attivo e se il pulsare e' abilitato per
@@ -1245,9 +1276,9 @@ def main():
                     # chiamata avrebbe reso invisibile il floor nei log,
                     # facendo sembrare "nero" un invio che in realta' non lo
                     # era (trovato dal vivo 2026-08-01 verificando il fix).
-                    debug_log(f"[QLC] gate cambiato -> {light_gate_now} (combined_pct={combined_pct:.1f}, "
-                              f"wave={_qlc_last_wave_scene_showing[0]}, ri-applicato subito, "
-                              f"rgb logico={_qlc_last_logical_rgb[0]})")
+                    lights_log(f"GATE cambiato -> {light_gate_now} (combined_pct={combined_pct:.1f}, "
+                               f"wave={_qlc_last_wave_scene_showing[0]}, ri-applicato subito, "
+                               f"rgb logico={_qlc_last_logical_rgb[0]}, light_mode={brain.model.light_mode})")
 
                 # STROBO BIANCO MANUALE (F8): vince SEMPRE sul gate normale
                 # sopra mentre attivo - lampeggia bianco puro su ENTRAMBI i

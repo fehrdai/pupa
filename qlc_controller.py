@@ -42,6 +42,14 @@ class QLCController:
         self._last_connect_attempt = time.monotonic()
         try:
             self.sock = socket.create_connection((self.host, self.port), timeout=5)
+            # TCP_NODELAY: senza questo, l'algoritmo di Nagle puo' ritardare
+            # fino a ~40ms ogni invio piccolo e frequente come set_channel()
+            # (un pacchetto per kick) - anche in locale, non e' un problema
+            # di banda ma di come lo stack TCP raggruppa i pacchetti piccoli.
+            # 2026-09-12: sospettato come causa delle luci "in ritardo su
+            # tutto" rispetto a video/musica - il canale OBS (WebSocket) non
+            # passa da questo socket grezzo, solo QLC+ ne risente.
+            self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
             debug_log(f"[QLC] connesso ({self.host}:{self.port})")
         except Exception as e:
             debug_log(f"[QLC] connessione OS2L fallita ({self.host}:{self.port}): {e}")

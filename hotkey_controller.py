@@ -66,6 +66,21 @@ class MultiLevelControl:
         self._active_prev = max(self._enabled_prev) if self._enabled_prev else 0
 
     @property
+    def resolved_level(self):
+        """Livello rilevato in OBS al momento di resolve() (2026-09-12) -
+        resolve() da solo aggiorna solo il tracking interno (_active_prev),
+        non propaga mai lo stato di partenza a chi usa questo controllo:
+        poll() comunica un cambio di livello solo quando ne rileva uno
+        DURANTE l'esecuzione, quindi senza questa property lo stato scelto
+        in OBS prima dell'avvio (es. una modalita' luci selezionata in una
+        sessione precedente) veniva silenziosamente ignorato ad ogni riavvio,
+        tornando al default hardcoded del chiamante finche' l'operatore non
+        premeva di nuovo l'hotkey - bug reale trovato dal vivo (modalita'
+        luci 'alternate' selezionata via F6, tornata 'inverse' dopo un
+        riavvio senza nessun avviso)."""
+        return self._active_prev
+
+    @property
     def active(self):
         return bool(self.item_ids)
 
