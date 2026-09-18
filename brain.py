@@ -454,15 +454,30 @@ BLACK_PAUSE_HOLD = (1.5, 3.5)  # secondi di nero
 # di tutte le altre (fino a x8) perche' e' esattamente l'asse che l'operatore
 # ha segnalato come mancante - "quasi tutto fermo" a CALM 3 richiede secondi
 # reali tra un cambio e l'altro, non 0.3-0.4s (debounce base di GROOVE/BUILD).
+#
+# 2026-09-18, ancora stessa sera: 11° e 12° asse, "flash" e "flash_len" -
+# operatore, test CALM 3 dub techno: "troppi flash colorati... si ha sempre
+# la sensazione di strobo". Analisi log: i flash che si vedevano NON erano le
+# raffiche (gia' drop-only a CALM 3) ma il LAMPO SINGOLO colorato (esito
+# "color" del ciclo principale 40/30/30, ~82ms a frame) e il flash nero
+# pre-drop RUNUP: nessuno dei due passava da _calm(). "flash" scala la
+# FREQUENZA (peso di "color" nel ciclo principale, prob. del lampo INTRO,
+# cooldown RUNUP = base/flash); "flash_len" allunga il frame del lampo
+# singolo (interval * flash_len) cosi' a CALM alto e' un bagliore e non un
+# guizzo da strobo. A 0 entrambi = 1.0 (nessun effetto). Numeri di partenza.
 CALM_MULTIPLIERS = {
     0: {"cut": 1.0,  "fade": 1.0, "black_prob": 1.0, "black_hold": 1.0, "burst_len": 1.0,
-        "monitor_bars": 1.0, "breather_prob": 1.0, "breather_off_bias": 0.0, "transition_p": 1.0, "debounce": 1.0},
+        "monitor_bars": 1.0, "breather_prob": 1.0, "breather_off_bias": 0.0, "transition_p": 1.0, "debounce": 1.0,
+        "flash": 1.0, "flash_len": 1.0},
     1: {"cut": 0.55, "fade": 1.25, "black_prob": 1.4, "black_hold": 1.2, "burst_len": 0.7,
-        "monitor_bars": 1.3, "breather_prob": 1.3, "breather_off_bias": 0.10, "transition_p": 0.55, "debounce": 2.0},
+        "monitor_bars": 1.3, "breather_prob": 1.3, "breather_off_bias": 0.10, "transition_p": 0.55, "debounce": 2.0,
+        "flash": 0.8, "flash_len": 1.3},
     2: {"cut": 0.25, "fade": 1.6, "black_prob": 2.0, "black_hold": 1.6, "burst_len": 0.4,
-        "monitor_bars": 1.8, "breather_prob": 1.6, "breather_off_bias": 0.25, "transition_p": 0.25, "debounce": 4.0},
+        "monitor_bars": 1.8, "breather_prob": 1.6, "breather_off_bias": 0.25, "transition_p": 0.25, "debounce": 4.0,
+        "flash": 0.65, "flash_len": 2.0},
     3: {"cut": 0.05, "fade": 2.2, "black_prob": 2.8, "black_hold": 2.2, "burst_len": 0.15,
-        "monitor_bars": 2.5, "breather_prob": 2.0, "breather_off_bias": 0.45, "transition_p": 0.05, "debounce": 8.0},
+        "monitor_bars": 2.5, "breather_prob": 2.0, "breather_off_bias": 0.45, "transition_p": 0.05, "debounce": 8.0,
+        "flash": 0.5, "flash_len": 3.0},
 }
 CALM_BLACK_PAUSE_PROB_CAP = 0.9  # non deve mai diventare "quasi sempre nero"
 CALM_BREATHER_PROB_CAP = 0.9  # stesso principio, per il respiro monitor/luci
@@ -2215,7 +2230,7 @@ class HybridCouplesModel:
             if resolved_by_arrival or resolved_by_timeout:
                 self.runup_flash_active = False
         elif (self.current_state in RUNUP_ELIGIBLE_STATES
-                and (current_time - self.last_runup_flash_time) > RUNUP_FLASH_COOLDOWN
+                and (current_time - self.last_runup_flash_time) > RUNUP_FLASH_COOLDOWN / self._calm("flash")
                 and self._detect_runup()):
             self.runup_flash_active = True
             self.runup_flash_start_time = current_time
@@ -2410,11 +2425,11 @@ class HybridCouplesModel:
                 # "assorbito", non e' un vero switch.
                 if self.current_state == State.INTRO and bass > self.recent_kick_peak_bass:
                     self.recent_kick_peak_bass = bass
-                    flash_prob = STROBE_FLASH_PROBABILITY.get(State.INTRO, 0.0)
+                    flash_prob = STROBE_FLASH_PROBABILITY.get(State.INTRO, 0.0) * self._calm("flash")
                     if flash_prob > 0 and random.random() < flash_prob:
                         self._trigger_strobe(current_scene, STROBE_FLASH_STEPS,
                                               return_scene=current_scene, return_is_a=True,
-                                              interval=self._get_strobe_interval())
+                                              interval=self._get_strobe_interval() * self._calm("flash_len"))
                         return self._advance_burst(current_time, current_scene, logger)
 
                 return None
@@ -2532,9 +2547,20 @@ class HybridCouplesModel:
                 # si comporta esattamente come l'ingresso INTRO/BREAK una
                 # volta atterrato li'. Il colore torna sulla stessa scena_A
                 # (non su _B) - e' un accento, non un vero switch.
+                # CALM "flash" (2026-09-18): il peso tolto al lampo colorato
+                # si divide meta' su "b" e meta' su wave_kick - cosi' la
+                # frequenza assoluta del lampo scala esattamente di
+                # calm("flash") senza ridistribuirsi su tutto il resto.
+                # Prima versione: tutto su "b"; test live CALM 3 ("mancavano
+                # un po' di cambi A/B, c'erano piu' wave e kick") ha mostrato
+                # kick/wave in calo (-27%/-8%/min) mentre le _B non calavano.
+                color_w = MAIN_CYCLE_COLOR_PROB * self._calm("flash")
+                freed = MAIN_CYCLE_COLOR_PROB - color_w
+                b_w = MAIN_CYCLE_B_PROB + freed / 2
+                wave_w = MAIN_CYCLE_WAVE_KICK_PROB + freed / 2
                 outcome = random.choices(
                     ["b", "wave_kick", "color"],
-                    weights=[MAIN_CYCLE_B_PROB, MAIN_CYCLE_WAVE_KICK_PROB, MAIN_CYCLE_COLOR_PROB],
+                    weights=[b_w, wave_w, color_w],
                     k=1
                 )[0]
 
@@ -2559,7 +2585,8 @@ class HybridCouplesModel:
                     identity_color = self._get_identity().get("color")
                     self._trigger_strobe(current_scene, STROBE_FLASH_STEPS,
                                           return_scene=current_scene, return_is_a=True,
-                                          alt_scene=identity_color, interval=self._get_strobe_interval())
+                                          alt_scene=identity_color,
+                                          interval=self._get_strobe_interval() * self._calm("flash_len"))
                     return self._advance_burst(current_time, current_scene, logger)
 
                 self.in_scene_a = False
