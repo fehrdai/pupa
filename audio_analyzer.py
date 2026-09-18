@@ -177,6 +177,12 @@ class AudioAnalyzer:
         # _kick_pending resta True finche' get_metrics() non lo consuma,
         # cosi' nessun kick vero puo' sparire tra due letture.
         self._kick_pending = False
+        # 2026-09-19 (PU.luci): stessa race di is_kick, stessa soluzione - is_drop
+        # vale True per UN SOLO blocco (quello del kick che lo innesca), quindi
+        # un loop che interroga get_metrics() piu' spesso del blocco (~25ms
+        # contro ~46ms) lo perde o lo vede due volte. drop_event e' consumato
+        # una volta sola da get_metrics(); is_drop resta com'e' per brain.py.
+        self._drop_pending = False
 
         # Stima BPM (vedi costanti sopra)
         self.kick_intervals = deque(maxlen=self.BPM_HISTORY_SIZE)
@@ -440,6 +446,7 @@ class AudioAnalyzer:
             bass_avg < self.drop_threshold_bass_hist_avg and
             self.is_kick):
             self.is_drop = True
+            self._drop_pending = True
         else:
             self.is_drop = False
 
@@ -520,6 +527,8 @@ class AudioAnalyzer:
 
             kick_consumed = self._kick_pending
             self._kick_pending = False
+            drop_consumed = self._drop_pending
+            self._drop_pending = False
 
             return {
                 "bass": self.bass_history[-1],
@@ -539,6 +548,12 @@ class AudioAnalyzer:
                 # sparisca mai in silenzio.
                 "is_kick": kick_consumed,
                 "is_drop": self.is_drop,
+                # Additive (2026-09-19, luci): evento drop consumato una sola
+                # volta + timestamp (time.time(), secondi) dell'ultimo kick
+                # rilevato - servono a lights/ per non perdere i drop e per
+                # misurare la latenza rilevamento->invio. pupa.py li ignora.
+                "drop_event": drop_consumed,
+                "last_kick_time": self.last_kick_time / 1000.0,
                 "is_break": self.is_break,
                 "db_level": self.db_level,
                 "peak": self.last_peak,
