@@ -100,7 +100,8 @@ def make_audio(rng, kicks):
     return audio
 
 
-def run(seed=7, verbose=False):
+def run(seed=7, verbose=False, strobe=True):
+    C.DROP_STROBE_ENABLED = strobe   # lo strobo su drop e' opzionale (default OFF in config): i test del meccanismo lo abilitano
     rng = random.Random(seed)
     eng = LightsEngine(rng=random.Random(seed + 1))
     audio = make_audio(rng, kick_times(rng))
@@ -297,6 +298,36 @@ def main():
         e4.tick(t, {"bass": 80 if kick else 20, "mid": 40, "db_level": -15, "bpm": 0.0, "is_kick": kick})
         sides += [int(x.split("lato=")[1].split()[0]) for x in e4.pop_events() if x.startswith("KICK lato=")]
     check("BPM assente: ping-pong regge", len(sides) >= 15 and all(sides[i] != sides[i + 1] for i in range(len(sides) - 1)), f"{len(sides)} kick, alternanza perfetta")
+
+    # 17. Strobo su drop DISATTIVATO (default di config): nessun lampo, nessuna rotazione da drop
+    e5, f5, _ = run(seed=7, strobe=False)
+    w = window(f5, 50.0, 52.5)
+    no_strobe = all(x[1]["f1"][3] == 255 for x in w) and not any(ev.startswith("DROP") for x in f5 for ev in x[3])
+    check("strobo da drop disattivabile", no_strobe and e5.stats["drops"] == 0 and e5.stats["drops_ignored"] >= 1,
+          f"con DROP_STROBE_ENABLED=False: Master sempre 255 e nessun evento DROP (drop ignorati={e5.stats['drops_ignored']})")
+    C.DROP_STROBE_ENABLED = False   # come da config
+
+    # 18. Colore imposto dal video: tutto in quel colore, rotazione propria sospesa; se il video sparisce la rotazione riprende
+    e6 = LightsEngine(rng=random.Random(11))
+    e6.set_external_color("red")
+    only = set(); rot_before = None
+    for i in range(int(70 / TICK)):
+        t = i * TICK
+        f = e6.tick(t, {"bass": 60, "mid": 40, "db_level": -15, "bpm": 128, "is_kick": i % 14 == 0})
+        if t > 3:
+            for side in ("f1", "f2"):
+                r, g, b, m = f[side]
+                if g or b: only.add((side, "g/b acceso"))
+    check("colore dal video: solo rosso su entrambi i fari per 70 s", not only and e6.stats["rotations"] == 0,
+          f"canali verde/blu accesi: {sorted(only) or 'nessuno'}, rotazioni proprie {e6.stats['rotations']} (frase di 15 s ignorata)")
+    e6.set_external_color("blue")
+    for i in range(int(70 / TICK), int(74 / TICK)):
+        f = e6.tick(i * TICK, {"bass": 60, "mid": 40, "db_level": -15, "bpm": 128, "is_kick": i % 14 == 0})
+    check("colore dal video: cambio a blu entro pochi secondi", e6.side_color == ["blue", "blue"], f"colori faro dopo 4 s: {e6.side_color}")
+    e6.set_external_color(None)
+    for i in range(int(74 / TICK), int(120 / TICK)):
+        e6.tick(i * TICK, {"bass": 60, "mid": 40, "db_level": -15, "bpm": 128, "is_kick": i % 14 == 0})
+    check("colore dal video perso: rotazione propria riprende", e6.stats["rotations"] >= 1, f"{e6.stats['rotations']} rotazioni proprie nei 46 s dopo la perdita")
 
     print("\nEventi motore:", eng.stats)
     print(f"\n{'TUTTO OK' if not FAILS else 'FALLITI: ' + ', '.join(FAILS)}")

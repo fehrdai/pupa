@@ -8,9 +8,11 @@ che F12 faccia un arresto pulito con i canali a 0.
 
 Non serve nessun servizio esterno. Esce con codice != 0 se un controllo fallisce.
 """
+import json
 import math
 import os
 import sys
+import tempfile
 import threading
 import time
 
@@ -138,11 +140,23 @@ def main():
         at(17.5, lambda: press(C.SRC_BLACKOUT, False))
         at(19.0, lambda: press(C.SRC_SHUTDOWN, True))              # F12
 
+    # colore del video: file scritto come farebbe pupa.py, tenuto fresco da un thread
+    color_file = os.path.join(tempfile.gettempdir(), "test_identity_color.json")
+    C.VIDEO_COLOR_FILE = color_file
+    stop_color = threading.Event()
+    def write_color():
+        while not stop_color.is_set():
+            with open(color_file, "w") as f:
+                json.dump({"color": "red_color", "t": time.time()}, f)
+            time.sleep(0.5)
+    threading.Thread(target=write_color, daemon=True).start()
+
     T0[0] = time.time()
     threading.Thread(target=script, daemon=True).start()
     t_start = time.time()
     P.main()
     dur = time.time() - t_start
+    stop_color.set()
 
     sent = fq.sent
     check("partenza: strobo/shutdown residui resettati da OBS", True, "il runner e' partito senza fermarsi subito (shutdown residuo ignorato) - durata "
@@ -174,6 +188,11 @@ def main():
     for t, ch, v in sent:
         final[ch] = v
     check("shutdown: tutti i canali a 0", all(final.get(ch) == 0 for ch in C.ALL_CHANNELS), f"valori finali {sorted(final.items())}")
+
+    gb = [(t, ch, v) for t, ch, v in sent if 4.5 <= t < 5.9 and ch in (C.CH["f1"]["g"], C.CH["f1"]["b"], C.CH["f2"]["g"], C.CH["f2"]["b"]) and v > 0]
+    red = [v for t, ch, v in sent if 4.5 <= t < 5.9 and ch in (C.CH["f1"]["r"], C.CH["f2"]["r"]) and v > 0]
+    check("colore dal video (file di PUPA live): solo rosso", not gb and len(red) > 5,
+          f"in [4.5,5.9)s: {len(red)} invii rossi >0, invii verde/blu >0: {len(gb)}")
 
     ts = [t for t, ch, v in sent]
     gaps = [b - a for a, b in zip(ts, ts[1:]) if b - a < 0.02]      # messaggi della stessa raffica

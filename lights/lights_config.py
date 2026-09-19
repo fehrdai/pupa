@@ -7,6 +7,7 @@ Le luci sono INDIPENDENTI dal video: nulla qui dipende da brain.py, dalle
 scene OBS, dall'identita' colore o dai monitor. Sorgente dei dati: solo
 l'audio (AudioAnalyzer.get_metrics()).
 """
+import os
 
 # ---------------------------------------------------------------------------
 # Hardware: id OS2L "cmd" del progetto QLC+ (vedi LIGHTS_CONFIG.md, tabella
@@ -71,6 +72,10 @@ SILENCE_HOLD_S = 1.5          # da quanto e' sotto soglia prima di dissolvere a 
 COLORS = {"red": (255, 0, 0), "green": (0, 255, 0), "blue": (0, 0, 255)}
 WHITE = (255, 255, 255)
 SINGLE_COLOR = True           # True: UN colore alla volta su entrambi i fari (come PUPA live: solo rosso, solo verde o solo blu, poi ruota); False: coppia, un colore diverso per faro. Operatore 2026-09-19.
+FOLLOW_VIDEO_COLOR = True     # 2026-09-19 (operatore): il colore delle luci SEGUE quello di PUPA live (identita' colore corrente, rosso/verde/blu). Unico legame col video, a senso unico: pupa.py scrive il nome del colore in VIDEO_COLOR_FILE, le luci lo leggono. Se il file manca o e' vecchio (pupa.py fermo) le luci tornano alla rotazione propria.
+VIDEO_COLOR_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs", "identity_color.json")
+VIDEO_COLOR_MAX_AGE_S = 10.0  # oltre questa eta' il file e' considerato "pupa.py non gira"
+VIDEO_COLOR_POLL_S = 0.5
 PHRASE_BEATS = 32             # ogni quanti beat (~una frase) ruota la coppia colore
 PHRASE_S_MIN = 10.0           # limiti in secondi (BPM assente/strano)
 PHRASE_S_MAX = 40.0
@@ -106,6 +111,7 @@ BREAK_MIX_TAU_S = 0.5         # dissolvenza tra comportamento normale e respiro
 # ---------------------------------------------------------------------------
 # Strobo sul DROP (proprio, non legato al video) + strobo manuale F8
 # ---------------------------------------------------------------------------
+DROP_STROBE_ENABLED = False    # 2026-09-19 (operatore): lo strobo automatico sui drop e' "troppo random" (la regola drop dell'analyzer scatta a caso, non legge la musica) - DISATTIVATO. Resta lo strobo MANUALE su F8. Rimettere True per riabilitarlo (con DROP_STROBE_COOLDOWN_S).
 DROP_STROBE_FLASHES = 6       # lampi bianchi (ognuno on+off)
 DROP_STROBE_INTERVAL_BEAT_DIV = 4   # mezzo periodo = beat/4 (un sedicesimo), con questi limiti
 DROP_STROBE_INTERVAL_MIN_S = 0.08   # >= 2-3 tick del loop (TICK_HZ) per restare frame-accurate

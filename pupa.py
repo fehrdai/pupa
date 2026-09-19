@@ -8,6 +8,7 @@ import sys
 import os
 import random
 import math
+import json
 import sounddevice as sd
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -146,6 +147,26 @@ def _resolve_audio_device(name):
         f"Device audio '{name}' non trovato. Rilancia list_audio_devices.py "
         f"e aggiorna AUDIO_DEVICE_NAME in secrets_local.py."
     )
+
+
+# COLORE PER LE LUCI (2026-09-19, PU.luci): il processo separato lights/pupa_luci.py
+# fa seguire alle luci il colore d'identita' corrente di PUPA live. Legame a senso
+# unico via file (best effort: un errore qui non deve MAI toccare il loop video):
+# {"color": "red_color", "t": <time.time()>}, riscritto al cambio identita' e ogni
+# 2 s come "battito" (le luci lo considerano scaduto dopo 10 s = pupa.py fermo).
+IDENTITY_COLOR_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs", "identity_color.json")
+IDENTITY_COLOR_PUBLISH_EVERY_S = 2.0
+
+
+def _publish_identity_color(name):
+    try:
+        os.makedirs(os.path.dirname(IDENTITY_COLOR_FILE), exist_ok=True)
+        tmp = IDENTITY_COLOR_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({"color": name, "t": time.time()}, f)
+        os.replace(tmp, IDENTITY_COLOR_FILE)
+    except Exception:
+        pass
 
 
 TRANSITION_MS = 2500
@@ -446,6 +467,7 @@ def main():
     # dissolvenza sul kick) - set_overlay_color ingoia da sola eventuali
     # errori se la sorgente non esiste ancora in questa installazione OBS.
     last_identity_color = [None]
+    identity_color_published_at = [0.0]  # ultimo momento in cui il colore e' stato scritto per le luci
     overlay_rgb = [None]           # colore attivo per l'identita' corrente, None se spento per questa coppia (roll off)
     overlay_peak_pct = [COLOR_OVERLAY_PEAK_PCT]  # picco per QUESTO colore (vedi COLOR_OVERLAY_PEAK_PCT_OVERRIDES)
     overlay_pulse_end_time = [0.0]  # 0.0 = nessun polso in corso
@@ -873,6 +895,9 @@ def main():
                 # questa coppia (COLOR_OVERLAY_OFF_PROBABILITY). Il pulsare
                 # vero e proprio avviene sotto, ad ogni kick.
                 identity_color = brain.get_identity_color_name()
+                if identity_color != last_identity_color[0] or current_time - identity_color_published_at[0] >= IDENTITY_COLOR_PUBLISH_EVERY_S:
+                    _publish_identity_color(identity_color)
+                    identity_color_published_at[0] = current_time
                 if identity_color != last_identity_color[0]:
                     rgb = identity_overlay_rgb.get(identity_color)
                     if rgb and random.random() >= COLOR_OVERLAY_OFF_PROBABILITY:

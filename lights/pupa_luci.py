@@ -23,6 +23,7 @@ Riusa i moduli condivisi (audio_analyzer/qlc_controller/obs_controller/
 hotkey_controller/shutdown_helpers) dalla cartella padre, come exhibition/.
 """
 import argparse
+import json
 import os
 import signal
 import subprocess
@@ -247,6 +248,21 @@ class ControlPoller(threading.Thread):
             pass
 
 
+def read_video_color(now):
+    """Colore corrente di PUPA live ('red'/'green'/'blue') dal file scritto da
+    pupa.py, o None se il file manca / e' vecchio (pupa.py non gira) / il colore
+    non e' uno dei primari."""
+    try:
+        with open(C.VIDEO_COLOR_FILE, encoding="utf-8") as f:
+            d = json.load(f)
+        if now - float(d.get("t", 0)) > C.VIDEO_COLOR_MAX_AGE_S:
+            return None
+        base = str(d.get("color") or "").split("_")[0].lower()
+        return base if base in C.COLORS else None
+    except Exception:
+        return None
+
+
 def main():
     ap = argparse.ArgumentParser(description="PUPA luci (QLC+), reattive al suono, indipendenti dal video")
     ap.add_argument("--no-obs", action="store_true", help="non usare OBS (nessun hotkey): default acceso, livello 2")
@@ -312,6 +328,7 @@ def main():
     w = {"t0": time.time(), "ticks": 0, "sends": 0, "kicks": 0, "lat": [], "gap_max": 0.0,
          "dark": 0, "live": 0}
     last_tick_wall = None
+    last_color_poll = 0.0
     try:
         while True:
             now = time.time()
@@ -323,6 +340,9 @@ def main():
             engine.set_level(snap["level"])
             engine.set_blackout(snap["blackout"])
             engine.set_manual_strobe(snap["strobe"])
+            if C.FOLLOW_VIDEO_COLOR and now - last_color_poll >= C.VIDEO_COLOR_POLL_S:
+                last_color_poll = now
+                engine.set_external_color(read_video_color(now))
 
             m = audio.get_metrics()
             frame = engine.tick(now, m)

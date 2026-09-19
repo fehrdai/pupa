@@ -79,6 +79,7 @@ class LightsEngine:
         self.pending_since = 0.0
         self.pending_applied = [True, True]
         self.last_rotate_t = None
+        self.external_color = None        # nome colore imposto da fuori (colore di PUPA live) - sospende la rotazione propria
 
         self.burst_active = False
         self.burst_k = 0
@@ -102,6 +103,24 @@ class LightsEngine:
         if level in C.LEVEL_SCALE and level != self.level:
             self.level = level
             self._ev(f"LIVELLO -> {level} (x{C.LEVEL_SCALE[level]})")
+
+    def set_external_color(self, name):
+        """Colore imposto dal video (PUPA live): 'red'/'green'/'blue' -> entrambi i
+        fari prendono quel colore (a faro buio, cambio invisibile) e la rotazione
+        propria e' sospesa; qualunque altro valore (None) -> torna alla rotazione
+        propria."""
+        name = name if name in C.COLORS else None
+        if name == self.external_color:
+            return
+        self.external_color = name
+        if name is None:
+            self.last_rotate_t = self.t_last
+            self._ev("COLORE del video perso -> rotazione propria")
+            return
+        self._ev(f"COLORE dal video -> {name}")
+        self.pending_pair = (name, name)
+        self.pending_since = self.t_last if self.t_last is not None else -1e9
+        self.pending_applied = [False, False]
 
     def set_blackout(self, active):
         active = bool(active)
@@ -230,7 +249,7 @@ class LightsEngine:
 
         # --- drop: strobo bianco proprio
         if drop:
-            if (self.on and not self.quiet and not self.in_break and not self.burst_active
+            if (C.DROP_STROBE_ENABLED and self.on and not self.quiet and not self.in_break and not self.burst_active
                     and t - self.last_drop_t >= C.DROP_STROBE_COOLDOWN_S):
                 self.burst_active = True
                 self.burst_k = 0
@@ -272,6 +291,8 @@ class LightsEngine:
         return out
 
     def _request_rotate(self, t, why):
+        if self.external_color is not None:
+            return   # il colore lo comanda il video
         options = [p for p in COLOR_PAIRS if p != self.pair]
         self.pending_pair = self.rng.choice(options)
         self.pending_since = t
