@@ -44,6 +44,7 @@ COMUNI (video + luci)
 Tasto            Source OBS               Cosa fa
 ---------------  -----------------------  ------------------------------------------------
 F8               PUPA_STROBE_WHITE        Strobo bianco manuale sulle luci (acceso/spento)
+                                          (unico strobo: quello automatico sui drop e' stato tolto)
 Shift+F8                                  Ferma lo strobo bianco
 F11              PUPA_BLACKOUT            BLACKOUT: monitor a nero + luci a zero (Master
                                           incluso); PUPA continua ad ascoltare
