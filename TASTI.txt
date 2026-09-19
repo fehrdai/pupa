@@ -1,0 +1,68 @@
+PUPA - TABELLA DEI TASTI (aggiornata 2026-09-19)
+================================================
+
+Come funzionano: sono tasti di OBS (Impostazioni > Tasti scelta rapida), legati alle
+source "fittizie" nella scena PUPA_Control (mai in onda). PUPA li legge guardando se la
+source e' "Mostra" o "Nascondi". Sono GLOBALI: funzionano anche se OBS non e' in primo piano.
+Su questa configurazione Ctrl+F-tasto e Alt+F-tasto NON funzionano; Shift+F-tasto e
+Ctrl+lettera si'.
+
+Chi li legge:  pupa.py = video/monitor    pupa_luci.py = luci (processo separato)
+
+
+VIDEO (pupa.py)
+---------------
+Tasto            Source OBS               Cosa fa
+---------------  -----------------------  ------------------------------------------------
+F1               PUPA_CALM_0              CALM 0: veloce, tagli, lampi
+F2               PUPA_CALM_1              CALM 1 (interpolato, non provato)
+F3               PUPA_CALM_2              CALM 2 (interpolato, non provato)
+F4               PUPA_CALM_3              CALM 3: lento, morbido, niente tagli/lampi
+Ctrl+L           PUPA_LOOP_SCENE          Blocca il timer di 4 min sulla scena_A corrente
+Ctrl+Shift+L                              Sblocca il loop scena
+F9               PUPA_SOLO_LUCI           Override monitor: monitor SEMPRE SPENTI (nero)
+Shift+F9                                  Toglie l'override
+F10              PUPA_SOLO_MONITOR        Override monitor: monitor SEMPRE ACCESI
+Shift+F10                                 Toglie l'override
+   (F9/F10 agiscono solo sui monitor: le luci non li leggono piu'.
+    Se F9 e F10 sono attivi insieme vince F10.)
+
+LUCI (pupa_luci.py)
+-------------------
+Tasto            Source OBS               Cosa fa
+---------------  -----------------------  ------------------------------------------------
+F5               PUPA_LUCI (Mostra)       Luci ACCESE (dissolvenza)
+Shift+F5         PUPA_LUCI (Nascondi)     Luci SPENTE (dissolvenza)
+Shift+1          PUPA_LUCI_LIVELLO_1      Livello basso  (tetto x0,15)
+Shift+2          PUPA_LUCI_LIVELLO_2      Livello medio  (tetto x0,50)  <- di partenza
+Shift+3          PUPA_LUCI_LIVELLO_3      Livello alto   (tetto x1,00)
+   (acceso/spento e livello restano memorizzati in OBS: al riavvio le luci
+    ripartono dallo stato in cui le hai lasciate.)
+
+COMUNI (video + luci)
+---------------------
+Tasto            Source OBS               Cosa fa
+---------------  -----------------------  ------------------------------------------------
+F8               PUPA_STROBE_WHITE        Strobo bianco manuale sulle luci (acceso/spento)
+Shift+F8                                  Ferma lo strobo bianco
+F11              PUPA_BLACKOUT            BLACKOUT: monitor a nero + luci a zero (Master
+                                          incluso); PUPA continua ad ascoltare
+Shift+F11                                 Fine blackout
+F12              PUPA_SHUTDOWN            ARRESTO PULITO di pupa.py E di pupa_luci.py
+                                          (fari a zero, OBS su black_color)
+Shift+F12                                 (ripristino della source)
+
+
+TASTI LIBERI
+------------
+F6, F7 e Shift+F6, Shift+F7 (ex modalita' luci, source eliminate il 2026-09-19).
+Shift+4..9 e tutte le lettere sono liberi tranne Ctrl+L / Ctrl+Shift+L.
+
+NOTE
+----
+- Shift+1/2/3 sono tasti globali: se scrivi altrove con Shift+1/2/3 ("!", "£", "%")
+  cambi anche il livello delle luci.
+- Le source dei tasti stanno in OBS, scena PUPA_Control (la scena tso, file
+  ~/.config/obs-studio/basic/scenes/tso_backup_before_scene_removal.json sul Linux).
+  Verificato leggendo quel file il 2026-09-19.
+- Dettagli: OBS_CONFIG.md ("Hotkey control sources") e LIGHTS_CONFIG.md.
