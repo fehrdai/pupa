@@ -277,3 +277,7 @@ Bugs caught by the tests/smoke run, fixed: (1) a drop right after a break was ig
 Process notes: `python - <<EOF` heredocs mangle `
 ` in this harness - use `chr(92)` or a script file. Not done (phase 2, needs Linux+OBS+operator): deploy, OBS sources + key binding, removal of the old light code from `pupa.py`/`brain.py`, live test with real music - checklist in `LIGHTS_CONFIG.md`. Do NOT run the new lights and the old `pupa.py` light code together.
 
+### 2026-09-19 evening (PU.luci, phase 2 started; ~18 h after the phase-1 commit)
+
+Operator switched on Linux/OBS/QLC+. Found QLC+ running as `qlcplus --open` = empty "New Workspace", no OS2L listener (9996/9999 closed) - not the runbook launch. Stopped it (nothing loaded, nothing to lose); relaunching it with the project (`DISPLAY=:0.0 ... qlcplus -w -o .../pupa.qxw -p`) was **blocked by the permission classifier**, so QLC+ was left DOWN and handed back to the operator. Done: deploy of `lights/` + `audio_analyzer.py` to Linux (backup kept), py_compile + engine test on Linux, OBS sources created (`create_obs_sources.py --apply`, then re-run showed all 4 present), runner smoke test against real OBS + audio (QLC+ down, silence): hotkey sources found, initial state from OBS, 30 ticks/s, gap 36 ms, clean shutdown path. Still open: QLC+ up, key binding, smoke test with DMX readback, removal of old light code (separate commit), live test.
+
