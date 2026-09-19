@@ -109,5 +109,5 @@ DROP_STROBE_FLASHES = 6       # lampi bianchi (ognuno on+off)
 DROP_STROBE_INTERVAL_BEAT_DIV = 4   # mezzo periodo = beat/4 (un sedicesimo), con questi limiti
 DROP_STROBE_INTERVAL_MIN_S = 0.08   # >= 2-3 tick del loop (TICK_HZ) per restare frame-accurate
 DROP_STROBE_INTERVAL_MAX_S = 0.12
-DROP_STROBE_COOLDOWN_S = 8.0
+DROP_STROBE_COOLDOWN_S = 30.0   # era 8: su musica vera lo strobo scattava ~ogni 10 s (3 in 30 s), troppo per un "drop" - operatore 2026-09-19
 STROBE_MANUAL_HALF_PERIOD_S = 0.1   # F8: on 0.1s / off 0.1s, come pupa.py
