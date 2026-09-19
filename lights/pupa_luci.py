@@ -129,6 +129,9 @@ class AsyncQLC:
                 batch, self._pending = self._pending, {}
             for ch, val in batch.items():
                 self.qlc.set_channel(ch, val)
+                # Pausa tra messaggi: senza, QLC+ scarta quasi meta' dei canali
+                # (vedi OS2L_MIN_GAP_S in lights_config.py).
+                time.sleep(C.OS2L_MIN_GAP_S)
 
     def stop(self):
         """Ferma il thread (svuota prima quello che e' in coda)."""

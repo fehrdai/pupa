@@ -175,6 +175,11 @@ def main():
         final[ch] = v
     check("shutdown: tutti i canali a 0", all(final.get(ch) == 0 for ch in C.ALL_CHANNELS), f"valori finali {sorted(final.items())}")
 
+    ts = [t for t, ch, v in sent]
+    gaps = [b - a for a, b in zip(ts, ts[1:]) if b - a < 0.02]      # messaggi della stessa raffica
+    check("invii OS2L distanziati (QLC+ scarta i messaggi ravvicinati)", bool(gaps) and min(gaps) >= C.OS2L_MIN_GAP_S * 0.7,
+          f"distanza minima tra messaggi consecutivi {min(gaps) * 1000:.1f} ms su {len(gaps)} coppie ravvicinate (>= {C.OS2L_MIN_GAP_S * 700:.1f} ms)")
+
     print(f"\n{'TUTTO OK' if not FAILS else 'FALLITI: ' + ', '.join(FAILS)}")
     return 1 if FAILS else 0
 

@@ -15,11 +15,16 @@ import websocket
 
 
 def _parse_channels_values(resp):
-    """'QLC+API|getChannelsValues|<idx>|<val>|<color>|<override>|...' ->
-    {indice_canale_1based: valore}."""
+    """'QLC+API|getChannelsValues|<idx>|<val>|<color>[|<override>]|<idx>|...' ->
+    {indice_canale_1based: valore}. Lo STRIDE dipende dalla versione di QLC+:
+    3 campi per canale su QLC+ 4.12.7 (Linux, verificato 2026-09-19), 4 nello
+    snapshot del 2026-07-29 (Windows) - con lo stride sbagliato i canali
+    oltre il primo blocco si disallineavano e sparivano dal dizionario (visto:
+    {1: 255, 5: 0, 9: 0, ...}). Lo rileva dall'indice del secondo canale."""
     parts = resp.split("|")[2:]
+    stride = 4 if len(parts) > 4 and parts[4] == "2" else 3
     values = {}
-    for i in range(0, len(parts) - 3, 4):
+    for i in range(0, len(parts) - (stride - 1), stride):
         try:
             values[int(parts[i])] = int(parts[i + 1])
         except (ValueError, IndexError):

@@ -24,6 +24,7 @@ ALL_CHANNELS = tuple(ch for side in CH.values() for ch in side.values())
 # ---------------------------------------------------------------------------
 TICK_HZ = 30                  # frequenza del loop luci (l'audio arriva a blocchi da ~46ms)
 MIN_SEND_STEP = 3             # un canale RGB si rimanda solo se cambia di almeno questo (0/255 sempre inviati) - limita il traffico OS2L
+OS2L_MIN_GAP_S = 0.002        # pausa minima tra due messaggi OS2L consecutivi. MISURATO 2026-09-19 su QLC+ 4.12.7 (Linux): messaggi JSON mandati uno dietro l'altro senza pausa -> 47% dei canali PERSI (113/240; il plugin parsa una lettura TCP per volta e scarta i JSON concatenati); con 1 ms di pausa 0/240 persi (idem 3 e 10 ms).
 SUMMARY_EVERY_S = 10.0        # riga riassuntiva di metriche in lights.log
 
 # ---------------------------------------------------------------------------

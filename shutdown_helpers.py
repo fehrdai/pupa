@@ -35,8 +35,16 @@ def spegni_luci_qlc(qlc, light_channels):
     if qlc.sock is None:
         qlc.connect()
     if qlc.sock is not None:
-        for ch in light_channels:
-            qlc.set_channel(ch, 0)
+        # 2026-09-19: pausa tra un messaggio e l'altro - misurato su QLC+ 4.12.7
+        # che messaggi OS2L mandati back-to-back vengono scartati quasi per
+        # meta' (47% dei canali persi, 0% con >=1 ms di pausa): lo spegnimento
+        # "a raffica" lasciava canali accesi (visto: Master F1 rimasto a 255 e
+        # colori residui dopo uno shutdown pulito). Doppio passaggio per
+        # sicurezza, costa ~60ms totali.
+        for _ in range(2):
+            for ch in light_channels:
+                qlc.set_channel(ch, 0)
+                time.sleep(0.003)
         print("[QLC] Fari spenti.")
     else:
         print("[QLC] Impossibile spegnere i fari (QLC+ non raggiungibile).")
