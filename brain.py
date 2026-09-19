@@ -429,13 +429,7 @@ BLACK_PAUSE_HOLD = (1.5, 3.5)  # secondi di nero
 #      probabilita' di innescare un respiro a fine giro, cap 0.9 come il
 #      nero), breather_off_bias (sposta il peso della scelta verso
 #      "both_off" quando un respiro scatta - vedi _advance_monitor_sequence).
-#      LIGHT_SEQUENCE_BARS/LIGHT_BREATHER_* sono riferimenti diretti alle
-#      stesse tabelle monitor (vedi sotto) quindi l'effetto si propaga da
-#      solo alla sequenza indipendente delle luci in modalita' "alternate";
-#      in modalita' "inverse" (quella attiva oggi) "piu' tempo monitor
-#      spenti" e "piu' luci accese" sono gia' la STESSA cosa per costruzione
-#      (get_light_outputs deriva le luci dal monitor), quindi non serve
-#      nessun terzo asse dedicato alle luci.
+#      (Le luci non leggono piu' queste tabelle: dal 2026-09-19 vivono in lights/.)
 # 2026-09-18: 9° asse, "transition_p" - moltiplica la p usata da
 # _weighted_transition() per scegliere il TIPO di transizione (vedi
 # TRANSITION_INTENSITY_PROBABILITY). Prima CALM non toccava il tipo per
@@ -626,36 +620,9 @@ MONITOR_BREATHER_CHOICE_WEIGHTS = {
     State.BUILD:  {"both_off": 0.2, "both_on": 0.8},
 }
 
-# AMBIENT LUCI (2026-07-29, Step 2 del piano luci - wiggly-moseying-blum.md):
-# durante gli stati di quiete le luci fisiche passano a un wash soffuso
-# indipendente dai kick, che SOSTITUISCE del tutto il pulsare a kick su QLC+
-# (conferma esplicita dell'operatore - non convive con esso). Il colore
-# resta quello dell'identita' corrente (get_identity_color_name(), stesso
-# dizionario nome->RGB gia' usato dal pulso a kick in pupa.py) - solo
-# l'intensita' cambia, un respiro lento (coseno, mai negativo) invece del
-# picco/decadimento legato al kick.
-AMBIENT_LIGHT_STATES = (State.INTRO, State.BREAK, State.RELAX)
-AMBIENT_BREATH_PERIOD_S = 10.0  # durata di un ciclo respiro completo (salita+discesa)
-AMBIENT_PEAK_PCT = 22  # intensita' di picco del respiro, percentuale - basso apposta ("soffuso")
-
-# ALTERNANZA FARI (2026-07-29, Step 3 del piano luci): stesso schema di
-# get_monitor_outputs()/_advance_monitor_sequence() (sequenza A/B programmata
-# a battute + respiro occasionale both_on/both_off) applicato ai 2 fari
-# fisici invece delle 2 uscite monitor - stato indipendente (light_seq_phase,
-# non sincronizzato con monitor_seq_phase), stesse tabelle di partenza
-# (riferimento diretto, non copia - se in futuro servono tempi diversi per
-# le luci basta assegnare dict separati qui).
-LIGHT_SEQUENCE_BARS = MONITOR_SEQUENCE_BARS
-LIGHT_BREATHER_PROBABILITY = MONITOR_BREATHER_PROBABILITY
-LIGHT_BREATHER_BARS = MONITOR_BREATHER_BARS
-LIGHT_BREATHER_CHOICE_WEIGHTS = MONITOR_BREATHER_CHOICE_WEIGHTS
-
-# 2026-07-30 (operatore, modalita' 'inverse'): soglia (percentuale, 0-100)
-# oltre la quale lo schermo e' considerato "abbastanza nero" da accendere
-# entrambi i fari - vedi _get_light_outputs_inverse(). Un valore basso
-# (non serve schermo TOTALMENTE nero) cattura anche l'inizio/fine del
-# respiro a battito, non solo il picco.
-LIGHT_INVERSE_BLACKNESS_THRESHOLD_PCT = 20
+# LUCI (QLC+): dal 2026-09-19 fuori da brain.py - processo separato lights/pupa_luci.py
+# (reattivo al suono, indipendente dal video). Rimossi: AMBIENT_*, LIGHT_SEQUENCE_BARS/
+# LIGHT_BREATHER_*, LIGHT_INVERSE_BLACKNESS_THRESHOLD_PCT, modalita' sync/alternate/inverse.
 
 # NOTA (2026-07-14): una pausa-respiro periodica era stata aggiunta qui per
 # ridurre la frequenza delle chiamate wmctrl, quando l'alternanza apriva e
@@ -937,8 +904,7 @@ class HybridCouplesModel:
         self._calm_dwell_side = None  # ultimo lato visto ("A"/"B"/"K") - un cambio riavvia la permanenza
         self.calm_level = 0  # 0-3, impostato dall'hotkey OBS (vedi CALM_MULTIPLIERS e set_calm_level)
         self.loop_scene = False  # hotkey OBS: congela il timer 4min sulla scena_A corrente (vedi set_loop_scene)
-        self.light_mode = "inverse"  # "sync"/"alternate"/"inverse" - hotkey F5/F6/F7, vedi set_light_mode/get_light_outputs
-        self.forced_mode = None  # None/"solo_monitor"/"solo_luci" - override manuale hotkey F9/F10, vince su light_mode/calm/stato (vedi set_forced_mode)
+        self.forced_mode = None  # None/"solo_monitor"/"solo_luci" - override manuale MONITOR hotkey F9/F10 (le luci non sono piu' qui), vince su calm/stato (vedi set_forced_mode)
 
         # FLASH NERO PRE-DROP (vedi RUNUP_* e _detect_runup)
         self.runup_flash_active = False  # gia' scattato per QUESTA risalita, in attesa che si risolva prima di poter riscattare
@@ -951,9 +917,6 @@ class HybridCouplesModel:
         self.monitor_last_flip_time = 0
         self.monitor_last_flip_bar = 0  # bar corrente (beat_count // BEATS_PER_BAR) al momento dell'ultimo cambio di fase
         self.monitor_seq_phase = "A"  # fase corrente della sequenza programmata: "A" / "B" / "both_on" / "both_off" (vedi get_monitor_outputs)
-        self.light_last_flip_time = 0
-        self.light_last_flip_bar = 0  # stessa idea di monitor_last_flip_bar, stato indipendente (Step 3 piano luci)
-        self.light_seq_phase = "A"  # fase dell'alternanza fari - stesso schema di monitor_seq_phase, non sincronizzata con esso
         self.last_energy_trend = 0  # bass - bass_avg dell'ultimo _update_state, per la raffica di cut
         self.recent_kick_peak_bass = 0  # Massimo kick visto nello stato corrente (per il lampo singolo GROOVE/BUILD)
         self.last_cut_burst_time = 0  # Cooldown tra una raffica di cut e la successiva
@@ -1403,173 +1366,6 @@ class HybridCouplesModel:
                 self.monitor_seq_phase = "A"
         else:  # era un respiro (both_on/both_off) - torna al ciclo normale
             self.monitor_seq_phase = "A"
-
-    def get_ambient_light(self, current_time):
-        """Intensita' (0.0-1.0, gia' scalata al picco AMBIENT_PEAK_PCT) del
-        wash ambient per gli stati di quiete - None se lo stato corrente non
-        e' uno di AMBIENT_LIGHT_STATES (nessun ambient da applicare, il
-        chiamante deve usare il pulso a kick normale). Il colore da usare e'
-        lo stesso get_identity_color_name() - pupa.py risolve nome->RGB e
-        scala per questa intensita', stesso dizionario gia' usato dal pulso
-        a kick, nessuna palette ambient separata."""
-        if self.current_state not in AMBIENT_LIGHT_STATES:
-            return None
-        phase = (current_time % AMBIENT_BREATH_PERIOD_S) / AMBIENT_BREATH_PERIOD_S
-        breath = (1 - math.cos(2 * math.pi * phase)) / 2  # 0..1..0, liscio, mai negativo
-        return breath * (AMBIENT_PEAK_PCT / 100.0)
-
-    # MODALITA' LUCI (2026-07-29, operatore) - 3 modalita' di funzionamento
-    # per il rapporto fari/monitor. Selezionabili a runtime via hotkey F5/F6/F7
-    # dal 2026-07-30 (self.light_mode, vedi set_light_mode/get_light_outputs) -
-    # prima erano solo scaffold/commento su richiesta esplicita dell'operatore
-    # ("mantieni le 3 opzioni solo commentandole per ora"). Default "inverse".
-    #   1. "sync"      - i 2 fari mostrano sempre lo stesso colore
-    #                    contemporaneamente, nessuna alternanza - il
-    #                    comportamento originale pre-Step 3 (_qlc_set_rgb_both
-    #                    manda RGB pieno a entrambi, senza gate).
-    #   2. "alternate" - alternanza A/B indipendente dai monitor (Step 3):
-    #                    get_light_outputs()/_advance_light_sequence()
-    #                    sotto, stato proprio (light_seq_phase).
-    #   3. "inverse"   - complementare ai monitor (proposta operatore
-    #                    2026-07-29, collegata alla visione "luci/video
-    #                    complementari" di una sessione precedente, DEFAULT):
-    #                    fari accesi quando i monitor sono spenti (per
-    #                    posizione), con enfasi sulle scene _wave e override
-    #                    quando lo schermo e' davvero nero - vedi
-    #                    _get_light_outputs_inverse.
-    def get_light_outputs(self, current_time, screen_blackness_pct=0.0, wave_scene_showing=False):
-        """Dispatcher tra le 3 modalita' luci (vedi commento sopra), ora
-        selezionabile a runtime via hotkey F5/F6/F7 (self.light_mode, vedi
-        set_light_mode) - 2026-07-30. Default 'inverse' (era gia' quella
-        attiva prima dell'hotkey).
-
-        screen_blackness_pct (0-100): quanto nero c'e' REALMENTE a schermo
-        in questo istante (overlay a battito + flash pre-drop + respiro
-        pausa nera - gia' unificati da pupa.py in un solo combined_pct,
-        vedi BLACK_OVERLAY_*/PRE_DROP_FLASH_*/get_black_pause_breath_phase).
-        wave_scene_showing: True se la scena Program corrente e' una _wave -
-        vedi _get_light_outputs_inverse per l'enfasi che abilita. Entrambi
-        passati solo a 'inverse' - le altre modalita' li ignorano."""
-        # OVERRIDE MANUALE (hotkey F9/F10) - vince su light_mode, stessa
-        # priorita' assoluta di get_monitor_outputs() sopra.
-        if self.forced_mode == "solo_monitor":
-            return {"fixture1": False, "fixture2": False}
-        if self.forced_mode == "solo_luci":
-            return {"fixture1": True, "fixture2": True}
-
-        if self.light_mode == "sync":
-            return self._get_light_outputs_sync()
-        if self.light_mode == "alternate":
-            return self._get_light_outputs_alternate(current_time)
-        return self._get_light_outputs_inverse(current_time, screen_blackness_pct, wave_scene_showing)
-
-    def _get_light_outputs_sync(self):
-        """Modalita' 'sync': i 2 fari mostrano sempre lo stesso colore
-        insieme, nessuna alternanza - comportamento pre-Step3 (_qlc_set_rgb_both
-        manda RGB pieno a entrambi, senza gate)."""
-        return {"fixture1": True, "fixture2": True}
-
-    def _get_light_outputs_inverse(self, current_time, screen_blackness_pct=0.0, wave_scene_showing=False):
-        """Modalita' 'inverse': complementare PER POSIZIONE, non "tutto o
-        niente" - fixture1 e' l'inverso di show1, fixture2 l'inverso di
-        show2 (2026-07-29, corretto dopo il primo test dal vivo - la prima
-        versione trattava "1 monitor acceso" come "1 monitor acceso" invece
-        di differenziare quale faro si accende). Soddisfa tutti e 4 i casi
-        richiesti dall'operatore:
-          - 1 monitor acceso + 1 spento -> il faro CORRISPONDENTE a quello
-            spento si accende, l'altro resta spento (non "tutti e due o
-            nessuno").
-          - 2 monitor spenti (both_off) -> 2 fari accesi.
-          - 2 monitor accesi (both_on) -> 2 fari spenti (lo strobo NON e'
-            toccato da questo gate - pilota Master per-frame indipendentemente,
-            vedi Step 1 - "eccetto strobo" e' gia' vero strutturalmente).
-        Riusa get_monitor_outputs() per leggere la fase corrente - funziona
-        anche se l'attivazione fisica dei 2 monitor (stacking finestre, solo
-        quando configurata) non e' attiva su questa macchina, dato che qui
-        serve solo la FASE del sequencer, non lo switch fisico delle finestre.
-
-        2026-07-30 (operatore): la fase A/B/both_on/both_off del sequencer
-        monitor e' TROPPO GROSSOLANA da sola - non cattura l'overlay nero a
-        battito ne' la pausa nera vera e propria durante le sovrapposizioni,
-        che sono i "nero" che l'operatore percepisce piu' spesso ("quando i
-        2 monitor fanno intermittenza sul nero le luci dovrebbero seguire").
-        Proposta operatore, confermata: unificare TUTTI e 3 i "neri" invece
-        di ascoltare solo il sequencer - se lo schermo e' visivamente scuro
-        ORA (screen_blackness_pct sopra soglia - gia' unifica overlay a
-        battito + flash pre-drop + respiro pausa nera, vedi pupa.py
-        combined_pct) ENTRAMBI i fari si accendono, a prescindere dalla fase
-        del sequencer monitor.
-
-        2026-07-30, ENFASI colore_wave (operatore, implementata): la scena
-        Program e' UNICA e condivisa (show1/show2 mostrano lo stesso
-        contenuto su 2 uscite fisiche diverse, si alterna solo QUALE delle 2
-        e' visibile, non il contenuto stesso) - quindi "il faro corrispondente
-        al monitor che mostra la sua scena _wave" si riduce a: se la scena
-        Program corrente e' una _wave (wave_scene_showing=True, passato da
-        pupa.py che conosce current_scene), il faro il cui lato e' "acceso"
-        si accende COMUNQUE come accento, anche se la regola inverse sopra
-        direbbe spento per quel lato."""
-        if screen_blackness_pct >= LIGHT_INVERSE_BLACKNESS_THRESHOLD_PCT:
-            return {"fixture1": True, "fixture2": True}
-        monitor_state = self.get_monitor_outputs(current_time)
-        fixture1 = (not monitor_state["show1"]) or wave_scene_showing
-        fixture2 = (not monitor_state["show2"]) or wave_scene_showing
-        return {"fixture1": fixture1, "fixture2": fixture2}
-
-    def _get_light_outputs_alternate(self, current_time):
-        """Modalita' 'alternate' (Step 3 originale): stessa identica
-        filosofia di get_monitor_outputs() (sequenza A/B programmata a
-        battute, con un respiro occasionale both_on/both_off), ma con stato
-        indipendente (light_seq_phase) - NON sincronizzata con l'alternanza
-        monitor, stesse tabelle di partenza. In DROP/PEAK converge su
-        entrambi accesi fissi, come per i monitor. Ritorna {"fixture1":
-        bool, "fixture2": bool}."""
-        if self.current_state in MONITOR_BOTH_ON_STATES:
-            return {"fixture1": True, "fixture2": True}
-
-        bars_needed = LIGHT_BREATHER_BARS if self.light_seq_phase in ("both_on", "both_off") \
-            else LIGHT_SEQUENCE_BARS.get(self.current_state, 2)
-
-        if self.last_bpm > 0:
-            current_bar = self.last_beat_count // BEATS_PER_BAR
-            is_bar_start = self.last_beat_count % BEATS_PER_BAR == 0
-            if (self.last_is_beat and is_bar_start
-                    and (current_bar - self.light_last_flip_bar) >= bars_needed):
-                self.light_last_flip_bar = current_bar
-                self.light_last_flip_time = current_time
-                self._advance_light_sequence()
-                debug_log(f"[LIGHT-SEQ] fase={self.light_seq_phase} stato={self.current_state.value} "
-                          f"bar={current_bar} bars_needed={bars_needed}")
-        else:
-            _, hi = MONITOR_ALTERNATION_INTERVAL_RANGE.get(self.current_state, (2.0, 4.0))
-            if current_time - self.light_last_flip_time >= hi:
-                self.light_last_flip_time = current_time
-                self.light_last_flip_bar = self.last_beat_count // BEATS_PER_BAR
-                self._advance_light_sequence()
-                debug_log(f"[LIGHT-SEQ] fase(fallback)={self.light_seq_phase} stato={self.current_state.value}")
-
-        if self.light_seq_phase == "A":
-            return {"fixture1": True, "fixture2": False}
-        if self.light_seq_phase == "B":
-            return {"fixture1": False, "fixture2": True}
-        if self.light_seq_phase == "both_on":
-            return {"fixture1": True, "fixture2": True}
-        return {"fixture1": False, "fixture2": False}  # "both_off"
-
-    def _advance_light_sequence(self):
-        """Avanza la sequenza fari - identica a _advance_monitor_sequence()
-        ma su light_seq_phase/LIGHT_BREATHER_*, stato indipendente."""
-        if self.light_seq_phase == "A":
-            self.light_seq_phase = "B"
-        elif self.light_seq_phase == "B":
-            prob = LIGHT_BREATHER_PROBABILITY.get(self.current_state, 0.0)
-            if random.random() < prob:
-                weights = LIGHT_BREATHER_CHOICE_WEIGHTS.get(self.current_state, {"both_off": 0.5, "both_on": 0.5})
-                self.light_seq_phase = random.choices(list(weights.keys()), weights=list(weights.values()), k=1)[0]
-            else:
-                self.light_seq_phase = "A"
-        else:  # era un respiro (both_on/both_off) - torna al ciclo normale
-            self.light_seq_phase = "A"
 
     def _get_strobe_interval(self):
         """Intervallo tra un frame e l'altro di flash/raffica, agganciato al
@@ -2383,7 +2179,6 @@ class HybridCouplesModel:
             # -> flip di fase ogni ~secondo (sfarfallio A/B, 41 cambi/min) appena il flip non ha piu'
             # richiesto is_beat. Ora get_monitor_outputs si riallinea da solo quando il contatore
             # torna INDIETRO (current_bar < flip_bar), l'unico caso reale.
-            self.light_last_flip_bar = 0  # stesso motivo di monitor_last_flip_bar sopra (Step 3 piano luci)
 
             # CAMBIO TRACCIA: non decidiamo SUBITO (il BPM appena uscito dal
             # break non si e' ancora ristabilizzato sui nuovi kick, vedi
@@ -2973,21 +2768,10 @@ def get_loop_scene():
     """True se il loop sulla scena_A corrente e' attivo."""
     return model.loop_scene
 
-def set_light_mode(mode):
-    """Imposta la modalita' luci ('sync'/'alternate'/'inverse', vedi
-    get_light_outputs) - hotkey OBS F5/F6/F7. Un valore non valido viene
-    ignorato (resta quella corrente) invece di rompere il dispatcher."""
-    if mode in ("sync", "alternate", "inverse"):
-        model.light_mode = mode
-
-def get_light_mode():
-    """Modalita' luci corrente (per il print console di pupa.py)."""
-    return model.light_mode
-
 def set_forced_mode(mode):
     """Override manuale monitor/luci (None/'solo_monitor'/'solo_luci') -
-    hotkey OBS F9/F10, vince su tutto il resto (vedi get_monitor_outputs/
-    get_light_outputs). Un valore non valido diventa None (nessun override)."""
+    hotkey OBS F9/F10, vince su tutto il resto (vedi get_monitor_outputs; le luci
+    non leggono piu' questo override). Un valore non valido diventa None."""
     model.forced_mode = mode if mode in ("solo_monitor", "solo_luci") else None
 
 def get_forced_mode():
@@ -2999,20 +2783,6 @@ def get_monitor_outputs(current_time):
     HybridCouplesModel.get_monitor_outputs. Chiamato da pupa.py ad ogni
     tick (solo Linux)."""
     return model.get_monitor_outputs(current_time)
-
-def get_ambient_light(current_time):
-    """Intensita' (0.0-1.0) del wash ambient per gli stati di quiete
-    (INTRO/BREAK/RELAX) - None se lo stato corrente non e' di quiete, vedi
-    HybridCouplesModel.get_ambient_light. Usato da pupa.py per sostituire il
-    pulso a kick sui fari fisici durante questi stati (2026-07-29, Step 2)."""
-    return model.get_ambient_light(current_time)
-
-def get_light_outputs(current_time, screen_blackness_pct=0.0, wave_scene_showing=False):
-    """Quale/i dei 2 fari fisici mostrare 'in vista' ora - vedi
-    HybridCouplesModel.get_light_outputs. Chiamato da pupa.py ad ogni tick
-    per attenuare il fixture non 'in vista' (2026-07-29, Step 3)."""
-    return model.get_light_outputs(current_time, screen_blackness_pct, wave_scene_showing)
-
 
 _UNIVERSAL_FALLBACK_TRANSITIONS = ["Cut", "Taglio", "Fade", "Dissolvenza"]
 
