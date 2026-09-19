@@ -127,6 +127,35 @@ def _load_scenes_config(path=SCENES_CONFIG_PATH):
 # presenti in OBS - vedi sotto.
 COUPLES, TRANSITION_POOL, SPECIAL_SCENES, STROBE_COLOR_POOL, IDENTITY_SETS, META_PAIR_DUOS = _load_scenes_config()
 
+
+def _load_calm_exclusive_b(path=SCENES_CONFIG_PATH):
+    """Scene _B usabili SOLO ad alcuni livelli CALM (2026-09-20, operatore: 4 video nuovi "da usare
+    esclusivamente con calm3"). Chiave opzionale di scenes_config.yaml, che e' specifica di ogni
+    macchina (le scene esistono solo nell'OBS di quel rig):
+
+        calm_scenes:
+          3: [fiori_B, mountain_B]      # queste _B compaiono SOLO a CALM 3
+
+    Ritorna {scena: {livelli in cui e' ammessa}}. Assente/illeggibile = nessun vincolo."""
+    if yaml is None:
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+        out = {}
+        for level, scenes in (data.get("calm_scenes") or {}).items():
+            for scene in scenes or []:
+                out.setdefault(scene, set()).add(int(level))
+        if out:
+            debug_log(f"[CONFIG] calm_scenes: {{scena: livelli}} = { {k: sorted(v) for k, v in out.items()} }")
+        return out
+    except Exception as e:
+        debug_log(f"[CONFIG] calm_scenes non leggibile ({e}), nessun vincolo")
+        return {}
+
+
+CALM_EXCLUSIVE_B = _load_calm_exclusive_b()
+
 # POOL CONDIVISO di tutte le scene_B (ristrutturazione 2026-07-15: prima
 # ogni scena_A pescava SOLO dal proprio pool in COUPLES, ora _select_b_scene
 # pesca da QUESTO pool comune a tutte le coppie - stessa filosofia di
@@ -259,8 +288,9 @@ def discover_and_merge_config(available_scenes, all_inputs, scene_item_names, pa
             debug_log(f"[CONFIG] scrittura di {path} fallita: {e}")
 
     global COUPLES, TRANSITION_POOL, SPECIAL_SCENES, STROBE_COLOR_POOL, IDENTITY_SETS, META_PAIR_DUOS
-    global ALL_B_SCENES, STROBE_SCENE, BLACK_PAUSE_SCENE
+    global ALL_B_SCENES, STROBE_SCENE, BLACK_PAUSE_SCENE, CALM_EXCLUSIVE_B
     COUPLES, TRANSITION_POOL, SPECIAL_SCENES, STROBE_COLOR_POOL, IDENTITY_SETS, META_PAIR_DUOS = _load_scenes_config(path)
+    CALM_EXCLUSIVE_B = _load_calm_exclusive_b(path)
     ALL_B_SCENES = _compute_all_b_scenes()
     STROBE_SCENE = SPECIAL_SCENES.get("strobo", "white_color")
     BLACK_PAUSE_SCENE = SPECIAL_SCENES.get("black", "black_color")
@@ -508,25 +538,28 @@ BLACK_PAUSE_HOLD = (1.5, 3.5)  # secondi di nero
 # (x durata dell'hold delle sovrapposizioni), "intro_break_ab" (1 = INTRO/BREAK usano il
 # ciclo A/B normale invece di quello esclusivo A<->wave_kick, che non ha mai una _B).
 # CALM_DWELL (sotto): permanenza MINIMA su _A e su _B a livelli alti.
+# 2026-09-20: "image_b" (1/1/1/0): a 0 le scene _B che CONTENGONO immagini (IMAGE_SCENES, es. `slide`)
+# non vengono usate come _B (operatore: a CALM 3 le slide di immagini escono, al loro posto i video
+# di calm_scenes). Le _A con una presentazione dentro restano (sono parte della scena _A).
 # Livelli 1-2: interpolazione lineare tra 0 e 3 per gli assi nuovi/modificati,
 # valori invariati per gli altri (mai provati dal vivo).
 CALM_MULTIPLIERS = {
     0: {"cut": 1.0,  "fade": 1.0, "black_prob": 1.0, "black_hold": 1.0, "burst_len": 1.0,
         "monitor_bars": 1.0, "breather_prob": 1.0, "breather_off_bias": 0.0, "transition_p": 1.0, "debounce": 1.0,
         "flash": 1.0, "flash_len": 1.0, "min_transition_ms": 0, "overlap_push": 0.0,
-        "breather_len": 1.0, "monitor_converge": 1, "overlay_pulse": 1.0, "kick_share": 1.0, "kick_dwell": 1.0, "overlap_hold": 1.0, "intro_break_ab": 0, "wave_push": 0.0, "enter_b_boost": 0.0},
+        "breather_len": 1.0, "monitor_converge": 1, "overlay_pulse": 1.0, "kick_share": 1.0, "kick_dwell": 1.0, "overlap_hold": 1.0, "intro_break_ab": 0, "wave_push": 0.0, "enter_b_boost": 0.0, "image_b": 1},
     1: {"cut": 0.55, "fade": 1.25, "black_prob": 1.4, "black_hold": 1.2, "burst_len": 0.7,
         "monitor_bars": 1.3, "breather_prob": 1.07, "breather_off_bias": 0.05, "transition_p": 0.55, "debounce": 2.0,
         "flash": 0.67, "flash_len": 1.3, "min_transition_ms": 600, "overlap_push": 0.17,
-        "breather_len": 1.2, "monitor_converge": 1, "overlay_pulse": 0.67, "kick_share": 0.75, "kick_dwell": 0.85, "overlap_hold": 1.2, "intro_break_ab": 0, "wave_push": 0.13, "enter_b_boost": 0.15},
+        "breather_len": 1.2, "monitor_converge": 1, "overlay_pulse": 0.67, "kick_share": 0.75, "kick_dwell": 0.85, "overlap_hold": 1.2, "intro_break_ab": 0, "wave_push": 0.13, "enter_b_boost": 0.15, "image_b": 1},
     2: {"cut": 0.25, "fade": 1.6, "black_prob": 2.0, "black_hold": 1.6, "burst_len": 0.4,
         "monitor_bars": 1.8, "breather_prob": 1.13, "breather_off_bias": 0.10, "transition_p": 0.25, "debounce": 4.0,
         "flash": 0.33, "flash_len": 2.0, "min_transition_ms": 1300, "overlap_push": 0.33,
-        "breather_len": 1.35, "monitor_converge": 1, "overlay_pulse": 0.33, "kick_share": 0.5, "kick_dwell": 0.7, "overlap_hold": 1.6, "intro_break_ab": 0, "wave_push": 0.27, "enter_b_boost": 0.3},
+        "breather_len": 1.35, "monitor_converge": 1, "overlay_pulse": 0.33, "kick_share": 0.5, "kick_dwell": 0.7, "overlap_hold": 1.6, "intro_break_ab": 0, "wave_push": 0.27, "enter_b_boost": 0.3, "image_b": 1},
     3: {"cut": 0.0,  "fade": 2.2, "black_prob": 2.8, "black_hold": 2.2, "burst_len": 0.15,
         "monitor_bars": 2.5, "breather_prob": 1.2, "breather_off_bias": 0.15, "transition_p": 0.05, "debounce": 8.0,
         "flash": 0.0, "flash_len": 3.0, "min_transition_ms": 2000, "overlap_push": 0.50,
-        "breather_len": 1.5, "monitor_converge": 0, "overlay_pulse": 0.0, "kick_share": 0.2, "kick_dwell": 0.5, "overlap_hold": 2.2, "intro_break_ab": 1, "wave_push": 0.40, "enter_b_boost": 0.6},
+        "breather_len": 1.5, "monitor_converge": 0, "overlay_pulse": 0.0, "kick_share": 0.2, "kick_dwell": 0.5, "overlap_hold": 2.2, "intro_break_ab": 1, "wave_push": 0.40, "enter_b_boost": 0.6, "image_b": 0},
 }
 # Pool transizioni per livello CALM (2026-09-18): solo negli estremi calmi.
 # Digital Glitch e' la piu' psichedelica (rank 4); Fade (dissolvenza vera,
@@ -883,6 +916,9 @@ POST_BREAK_RISE_RATE_THRESHOLD = 3.0    # unita' di bass/secondo per "risalita v
 
 class HybridCouplesModel:
     def __init__(self):
+        # calm_level PRIMA di tutto: la prima _roll_next_b_scene() qui sotto lo legge (filtro _B per livello CALM,
+        # 2026-09-20) - con calm_scenes nel config, senza questa riga l'import del modulo crashava.
+        self.calm_level = 0
         self.current_couple_a = "urbanfree_A"
         # Ultima scena _B REALMENTE mostrata (non un tentativo intermedio
         # scartato per assorbimento) — usata per l'anti-repeat vero, vedi
@@ -1030,7 +1066,8 @@ class HybridCouplesModel:
         # subito all'opera". Solo un override una tantum su questo avvio,
         # non cambia il pool ne' le rotazioni successive.
         # (2026-09-20: solo se la coppia risultante rispetta "mai immagini con immagini")
-        if "slide" in ALL_B_SCENES and not (self.current_couple_a in IMAGE_SCENES and "slide" in IMAGE_SCENES):
+        if ("slide" in ALL_B_SCENES and self._b_allowed_now("slide")
+                and not (self.current_couple_a in IMAGE_SCENES and "slide" in IMAGE_SCENES)):
             self.current_b_scene = "slide"
             self.last_shown_b_scene = "slide"
         self.couple_start_time = current_time
@@ -1150,6 +1187,24 @@ class HybridCouplesModel:
         available = [a for a in pool if a != self.current_couple_a]
         return available[0] if available else pool[0]
 
+    def _b_allowed_now(self, b_scene):
+        """True se la _B e' ammessa al livello CALM corrente: le _B in CALM_EXCLUSIVE_B solo ai
+        loro livelli; quelle con immagini solo dove l'asse image_b e' 1."""
+        levels = CALM_EXCLUSIVE_B.get(b_scene)
+        if levels is not None and getattr(self, "calm_level", 0) not in levels:
+            return False
+        if b_scene in IMAGE_SCENES and not self._calm("image_b"):
+            return False
+        return True
+
+    def _refresh_b_for_calm(self):
+        """Dopo un cambio di livello CALM: se la _B gia' scelta per la coppia non e' piu' ammessa
+        la ricalcola (altrimenti resterebbe una _B "sbagliata" fino al prossimo cambio coppia)."""
+        if self.current_b_scene and not self._b_allowed_now(self.current_b_scene):
+            old = self.current_b_scene
+            self.current_b_scene = self._roll_next_b_scene()
+            debug_log(f"[CALM-B] CALM {self.calm_level}: _B {old} non piu' ammessa -> {self.current_b_scene}")
+
     def _select_b_scene(self, couple_a, exclude=None):
         """Sceglie una scena _B dal pool CONDIVISO tra tutte le coppie
         (ALL_B_SCENES, ristrutturazione 2026-07-15 - prima pescava solo dal
@@ -1165,6 +1220,13 @@ class HybridCouplesModel:
         pool = ALL_B_SCENES or COUPLES.get(couple_a, [])
         if not pool:
             return None
+        # Filtro per livello CALM (2026-09-20): _B esclusive di certi livelli (CALM_EXCLUSIVE_B) e _B con
+        # immagini escluse dove image_b=0. Se non resta nulla il vincolo cede (loggato).
+        level_ok = [b for b in pool if self._b_allowed_now(b)]
+        if level_ok:
+            pool = level_ok
+        else:
+            debug_log(f"[CALM-B] nessuna _B ammessa a CALM {self.calm_level}: vincolo ignorato")
         # "Mai immagini con immagini" (vedi IMAGE_SCENES): una _A con immagini prende solo _B
         # senza immagini. Se non ne resta nessuna, il vincolo cede (meglio una coppia "vietata"
         # che nessuna _B) e lo si scrive nel log.
@@ -2772,6 +2834,13 @@ def get_strobe_burst_color():
         return None
     return model.burst_alt_scene
 
+def get_current_b_scene():
+    """Scena _B scelta per la coppia corrente (fissata a inizio coppia, ricalcolata se cambia il livello
+    CALM - vedi _refresh_b_for_calm). pupa.py la usa per tenere in riproduzione solo i video che servono
+    (media_guard.py)."""
+    return model.current_b_scene
+
+
 def get_current_couple_a():
     """Scena_A su cui il modello crede di trovarsi ORA (randomizzata da
     initialize_model - vedi HybridCouplesModel.initialize). pupa.py la usa
@@ -2785,7 +2854,11 @@ def set_calm_level(level):
     chiamato da pupa.py quando rileva un cambio nell'hotkey OBS dedicato.
     Clampato a [0,3] per sicurezza (un valore fuori range non deve rompere
     _calm())."""
-    model.calm_level = max(0, min(3, level))
+    new_level = max(0, min(3, level))
+    changed = new_level != model.calm_level
+    model.calm_level = new_level
+    if changed:
+        model._refresh_b_for_calm()
 
 def get_calm_value(key):
     """Valore corrente di un asse CALM_MULTIPLIERS (vedi _calm) - per pupa.py, che deve

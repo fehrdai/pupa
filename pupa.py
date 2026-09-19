@@ -21,6 +21,7 @@ from logger import setup_logger
 from debug_logger import debug as debug_log, setup_debug_logger
 
 from runtime_monitor import RuntimeMonitor
+from media_guard import MediaGuard
 from window_manager import get_window_manager
 from hotkey_controller import MultiLevelControl, BinaryControl
 from shutdown_helpers import shutdown_step, obs_a_nero
@@ -391,6 +392,7 @@ SHUTDOWN_SOURCE = "PUPA_SHUTDOWN"
 # Programma e misura se disegna qualcosa; se e' buio forza per un attimo una scena luminosa
 # (distingue "scena scura" da "proiettore rotto") e, se resta nero, riapre la coppia (max
 # MONITOR_CHECK_RETRIES volte). Solo Linux (xwd): altrove region_stats() torna None e si salta.
+MEDIA_GUARD_ENABLED = True  # ferma i video delle _B esclusive di un livello CALM finche' non servono (vedi media_guard.py)
 MONITOR_STARTUP_CHECK = True
 MONITOR_CHECK_MIN_LUM = 2.0      # luminanza media (0-255) sopra cui il proiettore "disegna"
 MONITOR_CHECK_MIN_STD = 3.0      # oppure deviazione sopra cui c'e' contenuto (scena scura ma non vuota)
@@ -798,6 +800,24 @@ def main():
     # test lanciato a mano: qui gira SEMPRE, su entrambe le macchine.
     runtime_monitor = RuntimeMonitor(obs)
 
+    # GUARDIANO DEI VIDEO (2026-09-20, vedi media_guard.py): OBS decodifica tutti i video anche fuori onda;
+    # i video delle _B esclusive di un livello CALM (`calm_scenes` nel config) restano fermi finche' la loro
+    # scena e' la _B della coppia corrente. Nessuna scena gestita = nessun effetto.
+    media_guard = None
+    if MEDIA_GUARD_ENABLED and brain.CALM_EXCLUSIVE_B:
+        try:
+            media_input_names = {i.get("inputName") for i in all_inputs
+                                 if (i.get("unversionedInputKind") or i.get("inputKind")) == "ffmpeg_source"}
+            managed_media = {sc: [n for n in obs.get_scene_item_source_names(sc) if n in media_input_names]
+                             for sc in brain.CALM_EXCLUSIVE_B if sc in scenes}
+            media_guard = MediaGuard(obs.client, managed_media)
+            media_guard.startup(brain.get_current_b_scene(), time.time())
+            print(f"[MEDIA] guardiano video: {len(media_guard.all_media)} video di {len(media_guard.managed)} scene gestiti, "
+                  f"in riproduzione ora: {sorted(media_guard.playing) or 'nessuno'}")
+        except Exception as e:
+            media_guard = None
+            print(f"[MEDIA] guardiano video non attivato ({e}): i video restano tutti in riproduzione")
+
     running = True
     calm_poll_tick = 0
     last_tick_time = None  # per la latenza del loop sotto - misura diretta di eventuali rallentamenti del ciclo di PUPA stesso
@@ -988,6 +1008,8 @@ def main():
                     current_scene=current_scene,
                     logger=logger
                 )
+                if media_guard is not None:
+                    media_guard.tick(brain.get_current_b_scene(), current_time)
 
                 # OVERLAY COLORE: al cambio identita' (rotazione coppia),
                 # decide il colore attivo e se il pulsare e' abilitato per
@@ -1201,6 +1223,8 @@ def main():
                         transition_ms=trans_ms,
                         transition_type=trans_type
                     )
+                    if media_guard is not None:
+                        media_guard.on_switched(next_scene)  # rete di sicurezza: RESTART se il suo video risulta STOPPED
 
                     print(f"[SWITCH] {current_scene} -> {next_scene} | {direction} {trans_type} {trans_ms}ms")
             
