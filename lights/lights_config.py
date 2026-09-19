@@ -48,7 +48,7 @@ DEFAULT_ON = True             # stato se la source SRC_LIGHTS_ONOFF non esiste i
 DEFAULT_LEVEL = 2             # livello se nessuna source livello e' accesa
 
 # Tetto di intensita' per livello (moltiplica il colore, non tocca lo strobo di Master).
-LEVEL_SCALE = {1: 0.35, 2: 0.70, 3: 1.00}
+LEVEL_SCALE = {1: 0.15, 2: 0.50, 3: 1.00}   # era 0.35/0.70/1.00 - operatore 2026-09-19: "piu' differenza tra 1,2,3"
 
 # ---------------------------------------------------------------------------
 # Accensione / spegnimento (dissolvenza del gain globale)

@@ -284,7 +284,8 @@ def main():
         f = e3.tick(t, {"bass": 55 + 35 * math.sin(2 * math.pi * 2 * t), "mid": 40, "db_level": -15, "bpm": 128, "is_kick": False})
         if t > 3:
             vals.append(mx(f))
-    check("senza kick: le luci seguono comunque il bass", max(vals) - min(vals) >= 25 and min(vals) > 0,
+    check("senza kick: le luci seguono comunque il bass", max(vals) - min(vals) >= 25 * C.LEVEL_SCALE[2] / 0.70 and min(vals) > 0,   # soglia proporzionale al livello 2 (tarata a 0.70)
+          
           f"escursione {max(vals) - min(vals)} (min {min(vals)}, max {max(vals)}) con is_kick sempre False")
 
     # 16. BPM assente (0): il ping-pong funziona con decadimento di default
