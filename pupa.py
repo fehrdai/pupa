@@ -971,13 +971,15 @@ def main():
                     if desired["show1"] != monitor_show1_state:
                         monitor_show1_state = desired["show1"]
                         target = monitor_show1_on_id if monitor_show1_state else monitor_show1_off_id
+                        twin = monitor_show1_off_id if monitor_show1_state else monitor_show1_on_id
                         attempted = True
-                        ok = window_manager.activate(target) and ok
+                        ok = window_manager.activate(target, twin) and ok
                     if desired["show2"] != monitor_show2_state:
                         monitor_show2_state = desired["show2"]
                         target = monitor_show2_on_id if monitor_show2_state else monitor_show2_off_id
+                        twin = monitor_show2_off_id if monitor_show2_state else monitor_show2_on_id
                         attempted = True
-                        ok = window_manager.activate(target) and ok
+                        ok = window_manager.activate(target, twin) and ok
 
                     if attempted:
                         if ok:

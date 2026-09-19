@@ -34,10 +34,12 @@ class WindowManager:
         hanno bisogno lo ignorano."""
         raise NotImplementedError
 
-    def activate(self, window_id):
+    def activate(self, window_id, sibling_id=None):
         """Porta la finestra GIA' APERTA in primo piano/sopra le altre.
         Nessuna creazione ne' distruzione. True se il rialzo e' verificato
-        riuscito, False altrimenti."""
+        riuscito, False altrimenti. `sibling_id` (opzionale): l'ALTRA finestra
+        della stessa coppia sovrapposta - se dato, il rialzo si verifica come
+        "window_id sta sopra sibling_id" invece che dal focus (vedi Linux)."""
         raise NotImplementedError
 
 
@@ -115,6 +117,32 @@ class LinuxWindowManager(WindowManager):
             debug_log(f"[MONITOR] xprop finestra attiva fallito: {e}")
         return None
 
+    def _get_stacking(self):
+        """ID (int) di _NET_CLIENT_LIST_STACKING, dal BASSO verso l'ALTO
+        (ordine di sovrapposizione reale delle finestre), o None se non
+        determinabile."""
+        try:
+            result = subprocess.run(["xprop", "-root", "_NET_CLIENT_LIST_STACKING"],
+                                     capture_output=True, text=True, timeout=3, env=self._env())
+            if "#" not in result.stdout:
+                return None
+            tokens = result.stdout.split("#", 1)[1].replace(",", " ").split()
+            return [int(t, 16) for t in tokens]
+        except Exception as e:
+            debug_log(f"[MONITOR] xprop pila finestre fallito: {e}")
+            return None
+
+    @staticmethod
+    def _is_above(stacking, window, sibling):
+        """True/False se `window` sta sopra/sotto `sibling` nella pila;
+        None se uno dei due non c'e' o la pila non e' disponibile."""
+        if not stacking:
+            return None
+        try:
+            return stacking.index(window) > stacking.index(sibling)
+        except ValueError:
+            return None
+
     def _close(self, window_id):
         """Chiude una finestra specifica per ID - usata SOLO in fase di
         avvio per ripulire eventuali proiettori rimasti da un lancio
@@ -124,11 +152,21 @@ class LinuxWindowManager(WindowManager):
         except Exception as e:
             debug_log(f"[MONITOR] wmctrl -c fallito ({window_id}): {e}")
 
-    def activate(self, window_id):
+    def activate(self, window_id, sibling_id=None):
         """VERIFICA POST-RIALZO: wmctrl puo' "riuscire" (nessuna eccezione)
-        senza che la finestra diventi DAVVERO quella attiva. Un breve
+        senza che la finestra diventi DAVVERO quella in primo piano. Un breve
         margine (0.1s) prima di controllare lascia al window manager il
-        tempo di aggiornare _NET_ACTIVE_WINDOW."""
+        tempo di aggiornare lo stato.
+
+        2026-09-19: con `sibling_id` (l'altra finestra della coppia) la verifica
+        e' sull'ORDINE DI SOVRAPPOSIZIONE (window_id sopra sibling_id, da
+        _NET_CLIENT_LIST_STACKING) invece che sul FOCUS (_NET_ACTIVE_WINDOW):
+        cio' che conta per il monitor e' quale finestra si VEDE, non chi ha il
+        focus. Motivo: in un test dal vivo una finestra estranea di OBS ha
+        tenuto il focus per 3.5 minuti e la verifica sul focus ha fallito 30
+        volte (3 pause di 30s dell'alternanza), anche se il rialzo poteva
+        essere riuscito. Senza sibling_id, o con pila non leggibile, resta la
+        vecchia verifica sul focus."""
         try:
             subprocess.run(["wmctrl", "-i", "-a", window_id], timeout=3, env=self._env(), capture_output=True)
         except Exception as e:
@@ -136,6 +174,19 @@ class LinuxWindowManager(WindowManager):
             return False
 
         time.sleep(0.1)
+        if sibling_id is not None:
+            above = self._is_above(self._get_stacking(), int(window_id, 16), int(sibling_id, 16))
+            if above is False:
+                debug_log(f"[MONITOR] rialzo NON verificato (pila): {window_id} non sta sopra {sibling_id}")
+                return False
+            if above is True:
+                active = self._get_active_window()
+                now = time.time()
+                if active is not None and active != int(window_id, 16) and now - getattr(self, "_last_focus_note", 0.0) > 30.0:
+                    self._last_focus_note = now
+                    debug_log(f"[MONITOR] rialzo verificato dalla pila; focus altrove ({hex(active)}) - ignorato")
+                return True
+            # above is None: pila non disponibile -> verifica sul focus qui sotto
         active = self._get_active_window()
         if active is not None and active != int(window_id, 16):
             debug_log(f"[MONITOR] rialzo NON verificato: richiesta {window_id}, attiva risulta {hex(active)}")
@@ -236,7 +287,7 @@ class WindowsWindowManager(WindowManager):
             seen += 1
         return None
 
-    def activate(self, window_id):
+    def activate(self, window_id, sibling_id=None):
         """Porta la finestra in cima allo z-order (SetWindowPos, non
         SetForegroundWindow: quest'ultimo fallisce sempre per un processo
         senza focus tastiera reale - vincolo Windows separato dal problema
