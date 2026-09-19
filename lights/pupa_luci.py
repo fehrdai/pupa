@@ -24,6 +24,7 @@ hotkey_controller/shutdown_helpers) dalla cartella padre, come exhibition/.
 """
 import argparse
 import os
+import signal
 import subprocess
 import sys
 import threading
@@ -249,7 +250,25 @@ class ControlPoller(threading.Thread):
 def main():
     ap = argparse.ArgumentParser(description="PUPA luci (QLC+), reattive al suono, indipendenti dal video")
     ap.add_argument("--no-obs", action="store_true", help="non usare OBS (nessun hotkey): default acceso, livello 2")
+    ap.add_argument("--zero", action="store_true", help="porta TUTTI i canali dei fari a 0 (con le pause OS2L) ed esce - per dopo uno stop forzato")
     args = ap.parse_args()
+
+    # Un processo lanciato in background da uno script/shell non interattiva
+    # EREDITA SIGINT come "ignorato" (POSIX) e Python allora non installa il
+    # suo handler: Ctrl+C / kill -INT non farebbero nulla (visto con
+    # avvia_luci.sh, lo stop pulito scadeva). Handler espliciti per SIGINT e
+    # SIGTERM -> stessa cascata di spegnimento (fari a zero) del finally.
+    def _graceful(signum, frame):
+        raise KeyboardInterrupt
+    signal.signal(signal.SIGINT, _graceful)
+    if hasattr(signal, "SIGTERM"):
+        signal.signal(signal.SIGTERM, _graceful)
+
+    if args.zero:
+        q = QLCController()
+        q.connect()
+        spegni_luci_qlc(q, C.ALL_CHANNELS)
+        return
 
     print("=" * 70)
     print("  PUPA LUCI - reattive al suono, indipendenti dal video")
