@@ -384,6 +384,79 @@ SHUTDOWN_SOURCE = "PUPA_SHUTDOWN"
 #     frac = (db_level - SCALE_AUDIO_THRESHOLD_DB) / (SCALE_AUDIO_CEILING_DB - SCALE_AUDIO_THRESHOLD_DB)
 #     return SCALE_MIN_SIZE + frac * (SCALE_MAX_SIZE - SCALE_MIN_SIZE)
 
+# CONTROLLO DI AVVIO DEI MONITOR (2026-09-20): in un test dal vivo un proiettore Programma e'
+# risultato "sopra" nella pila delle finestre ma con lo schermo 100% nero (avvio del 2026-09-19
+# 23:50, riavviare PUPA ha risolto): il log del brain mostra solo l'intenzione, non i pixel.
+# Dopo aver aperto i proiettori e portato OBS sulla prima scena, per ogni uscita porta sopra il
+# Programma e misura se disegna qualcosa; se e' buio forza per un attimo una scena luminosa
+# (distingue "scena scura" da "proiettore rotto") e, se resta nero, riapre la coppia (max
+# MONITOR_CHECK_RETRIES volte). Solo Linux (xwd): altrove region_stats() torna None e si salta.
+MONITOR_STARTUP_CHECK = True
+MONITOR_CHECK_MIN_LUM = 2.0      # luminanza media (0-255) sopra cui il proiettore "disegna"
+MONITOR_CHECK_MIN_STD = 3.0      # oppure deviazione sopra cui c'e' contenuto (scena scura ma non vuota)
+MONITOR_CHECK_BRIGHT_LUM = 20.0  # con scena luminosa forzata, sotto questo valore il proiettore e' rotto
+MONITOR_CHECK_RETRIES = 2
+
+
+def _monitor_output_renders(window_manager, obs, on_id, off_id, bright_scene, restore_scene):
+    """True = il proiettore Programma disegna, False = resta nero anche con una scena luminosa,
+    None = controllo non possibile (piattaforma senza misura)."""
+    window_manager.activate(on_id, off_id)
+    time.sleep(0.4)
+    stats = window_manager.region_stats(on_id)
+    if stats is None:
+        return None
+    mean, std = stats
+    if mean >= MONITOR_CHECK_MIN_LUM or std >= MONITOR_CHECK_MIN_STD:
+        return True
+    if not bright_scene:
+        return None  # buio ma niente scena luminosa con cui distinguere: non decido
+    obs.switch_scene(bright_scene, transition_ms=50, transition_type="Taglio")
+    time.sleep(0.6)
+    stats = window_manager.region_stats(on_id)
+    obs.switch_scene(restore_scene, transition_ms=50, transition_type="Taglio")
+    if stats is None:
+        return None
+    return stats[0] >= MONITOR_CHECK_BRIGHT_LUM
+
+
+def ensure_monitor_outputs(obs, window_manager, outputs, black_scene, bright_scene, restore_scene):
+    """`outputs`: lista di dict {name, index, x, on, off}. Verifica che ogni uscita disegni e
+    riapre la coppia di proiettori se no. Ritorna la lista (con gli ID eventualmente rinnovati).
+    Non solleva mai: un problema qui non deve bloccare l'avvio."""
+    try:
+        for out in outputs:
+            for attempt in range(MONITOR_CHECK_RETRIES + 1):
+                ok = _monitor_output_renders(window_manager, obs, out["on"], out["off"], bright_scene, restore_scene)
+                if ok is None:
+                    print(f"[MONITOR] controllo di avvio non disponibile ({out['name']}), salto")
+                    return outputs
+                if ok:
+                    msg = f"[MONITOR] controllo di avvio: {out['name']} OK" + (f" (dopo {attempt} riapertura/e)" if attempt else "")
+                    print(msg)
+                    debug_log(msg)
+                    break
+                if attempt >= MONITOR_CHECK_RETRIES:
+                    msg = f"[MONITOR] ATTENZIONE: {out['name']} resta NERO dopo {MONITOR_CHECK_RETRIES} riaperture - controlla il monitor"
+                    print(msg)
+                    debug_log(msg)
+                    break
+                msg = f"[MONITOR] controllo di avvio: {out['name']} NERO, riapro la coppia (tentativo {attempt + 1}/{MONITOR_CHECK_RETRIES})"
+                print(msg)
+                debug_log(msg)
+                new_on, new_off = window_manager.open_stacked_pair(obs, out["index"], black_scene, position_key=out["x"])
+                if new_on is None or new_off is None:
+                    print(f"[MONITOR] riapertura di {out['name']} fallita")
+                    break
+                out["on"], out["off"] = new_on, new_off
+        for out in outputs:  # stato di partenza: nero sopra, come prima del controllo
+            window_manager.activate(out["off"], out["on"])
+    except Exception as e:
+        print(f"[MONITOR] controllo di avvio interrotto ({e}), continuo")
+        debug_log(f"[MONITOR] controllo di avvio: eccezione {e}")
+    return outputs
+
+
 def main():
     print("=" * 70)
     print("  PUPA VJ BRAIN - Production")
@@ -691,6 +764,20 @@ def main():
         obs.switch_scene(starting_couple_a, transition_ms=800, transition_type="Fade")
         current_scene = starting_couple_a
     print(f"[BRAIN] Inizializzato su scena: {current_scene}")
+
+    # Controllo di avvio dei monitor (vedi MONITOR_STARTUP_CHECK sopra): la prima scena di
+    # contenuto e' gia' in onda (transizione da 800ms in corso), quindi un proiettore sano
+    # disegna qualcosa.
+    if MONITOR_STARTUP_CHECK and monitor_alternation_enabled and window_manager is not None:
+        time.sleep(1.0)  # lascia finire la transizione iniziale
+        bright_scene = next((s for s in ["white_color"] + list(brain.STROBE_COLOR_POOL) if s in scenes), None)
+        checked = ensure_monitor_outputs(
+            obs, window_manager,
+            [{"name": "show1", "index": MONITOR_SHOW1_INDEX, "x": monitor_show1_x, "on": monitor_show1_on_id, "off": monitor_show1_off_id},
+             {"name": "show2", "index": MONITOR_SHOW2_INDEX, "x": monitor_show2_x, "on": monitor_show2_on_id, "off": monitor_show2_off_id}],
+            MONITOR_BLACK_SCENE, bright_scene, current_scene)
+        monitor_show1_on_id, monitor_show1_off_id = checked[0]["on"], checked[0]["off"]
+        monitor_show2_on_id, monitor_show2_off_id = checked[1]["on"], checked[1]["off"]
 
     # MONITORAGGIO STABILITA' RUNTIME (2026-07-21): GetStats di OBS +
     # latenza del loop di PUPA, incrociati con l'audio/stato corrente ad

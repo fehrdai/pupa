@@ -64,7 +64,7 @@ MONITOR_SHOW1_INDEX = 1  # e.g. DisplayPort-0
 MONITOR_SHOW2_INDEX = 2  # e.g. HDMI-A-0
 MONITOR_BLACK_SCENE = "black_master"
 ```
-Requires `wmctrl` for the projector-raising mechanism (see `OBS_CONFIG.md`/`PUPA_ARCHITECTURE.md`) — `sudo apt install wmctrl` if missing.
+Requires `wmctrl` for the projector-raising mechanism (see `OBS_CONFIG.md`/`PUPA_ARCHITECTURE.md`) — `sudo apt install wmctrl` if missing. The startup monitor check (2026-09-20) also needs `xwd` (`sudo apt install x11-apps`; already present on the live rig) and `numpy`; without `xwd` the check just logs "controllo di avvio non disponibile" and is skipped.
 
 ## Cross-machine audio test rig (Windows → Linux, for remote dev without being at the venue)
 

@@ -42,6 +42,14 @@ class WindowManager:
         "window_id sta sopra sibling_id" invece che dal focus (vedi Linux)."""
         raise NotImplementedError
 
+    def region_stats(self, window_id):
+        """(luminanza media 0-255, deviazione standard) di CIO' CHE SI VEDE sullo schermo nella
+        zona occupata da `window_id`, o None se non misurabile / non supportato su questa
+        piattaforma. Serve al controllo di avvio dei monitor (vedi pupa.py): un proiettore puo'
+        risultare "sopra" nella pila delle finestre ma non disegnare nulla (visto dal vivo
+        2026-09-19)."""
+        return None
+
 
 class LinuxWindowManager(WindowManager):
     """wmctrl/xprop (X11) - logica invariata rispetto alla versione storica
@@ -141,6 +149,42 @@ class LinuxWindowManager(WindowManager):
         try:
             return stacking.index(window) > stacking.index(sibling)
         except ValueError:
+            return None
+
+    def _window_geometry(self, window_id):
+        """(x, y, larghezza, altezza) della finestra da wmctrl -l -G, o None."""
+        try:
+            result = subprocess.run(["wmctrl", "-l", "-G"], capture_output=True, text=True, timeout=3, env=self._env())
+            target = int(window_id, 16)
+            for line in result.stdout.splitlines():
+                parts = line.split(None, 7)
+                if len(parts) >= 7 and int(parts[0], 16) == target:
+                    return int(parts[2]), int(parts[3]), int(parts[4]), int(parts[5])
+        except Exception as e:
+            debug_log(f"[MONITOR] geometria finestra fallita ({window_id}): {e}")
+        return None
+
+    def region_stats(self, window_id):
+        """Vedi WindowManager.region_stats. Cattura la root con `xwd` (legge il framebuffer, quindi
+        vede i pixel reali dei proiettori) e ritaglia la zona della finestra."""
+        geo = self._window_geometry(window_id)
+        if geo is None:
+            return None
+        try:
+            import struct
+            import numpy as np
+            raw = subprocess.run(["xwd", "-root", "-silent"], capture_output=True, timeout=6, env=self._env()).stdout
+            hdr = struct.unpack(">25I", raw[:100])
+            hsize, width, height, bpl, bpp, ncol = hdr[0], hdr[4], hdr[5], hdr[12], hdr[11], hdr[19]
+            arr = np.frombuffer(raw, dtype=np.uint8, count=height * bpl, offset=hsize + ncol * 12).reshape(height, bpl)
+            lum = arr[:, : width * (bpp // 8)].reshape(height, width, bpp // 8)[:, :, :3].astype(np.float32).mean(axis=2)
+            x, y, w_, h_ = geo
+            region = lum[max(0, y): y + h_, max(0, x): x + w_]
+            if region.size == 0:
+                return None
+            return float(region.mean()), float(region.std())
+        except Exception as e:
+            debug_log(f"[MONITOR] region_stats fallita ({window_id}): {e}")
             return None
 
     def _close(self, window_id):
