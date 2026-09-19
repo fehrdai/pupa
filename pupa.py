@@ -505,6 +505,18 @@ def main():
     # quella invece di alternare A/B (vedi brain.validate_scenes).
     transitions = obs.get_transition_list()
     validation = brain.validate_scenes(scenes, transitions)
+
+    # REGOLA "MAI IMMAGINI CON IMMAGINI" (2026-09-20): riconosce per CONTENUTO quali scene
+    # (A e B, comprese le _B senza suffisso scritte a mano nel config come "slide" e le scene
+    # annidate) mostrano immagini, e le passa al brain che non le accoppia tra loro.
+    try:
+        image_names = scene_discovery.image_input_names(all_inputs)
+        pair_scenes = set(candidate_scenes) | set(brain.ALL_B_SCENES) | set(brain.COUPLES.keys())
+        image_scenes = scene_discovery.scenes_with_images(pair_scenes, obs.get_scene_item_source_names, image_names, set(scenes))
+        brain.set_image_scenes(image_scenes)
+        print(f"[PUPA] Scene con immagini (mai accoppiate tra loro): {sorted(image_scenes) or 'nessuna'}")
+    except Exception as e:
+        print(f"[PUPA] Riconoscimento scene con immagini fallito ({e}): nessun vincolo immagini")
     print(f"[PUPA] Validazione: {len(validation['couples'])} coppie valide"
           f"{' | MODALITA DEGENERATA (1 sola scena)' if validation['degenerate'] else ''}")
 

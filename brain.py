@@ -145,6 +145,21 @@ def _compute_all_b_scenes():
 
 ALL_B_SCENES = _compute_all_b_scenes()
 
+# REGOLA "MAI IMMAGINI CON IMMAGINI" (2026-09-20, operatore: "le immagini non siano usate tra di
+# loro come scene _A e _B, ma solo insieme a dei video"): insieme delle scene (A o B) che
+# CONTENGONO immagini (slideshow/image_source, anche in scene annidate), riempito da pupa.py
+# all'avvio dal contenuto reale di OBS (vedi scene_discovery.scenes_with_images). Una scena_A
+# in questo insieme non viene mai accoppiata a una scena_B in questo insieme (_select_b_scene) e
+# viceversa. Vuoto = nessun vincolo.
+IMAGE_SCENES = set()
+
+
+def set_image_scenes(names):
+    """Imposta IMAGE_SCENES (chiamata da pupa.py dopo il riconoscimento per contenuto)."""
+    global IMAGE_SCENES
+    IMAGE_SCENES = set(names or [])
+    debug_log(f"[IMMAGINI] scene con immagini (mai accoppiate tra loro): {sorted(IMAGE_SCENES)}")
+
 
 def discover_and_merge_config(available_scenes, all_inputs, scene_item_names, path=SCENES_CONFIG_PATH):
     """Riempie le sezioni MANCANTI di scenes_config.yaml (couples,
@@ -1014,7 +1029,8 @@ class HybridCouplesModel:
         # scena_B mostrata al primo avvio di pupa.py - "cosi' la vediamo
         # subito all'opera". Solo un override una tantum su questo avvio,
         # non cambia il pool ne' le rotazioni successive.
-        if "slide" in ALL_B_SCENES:
+        # (2026-09-20: solo se la coppia risultante rispetta "mai immagini con immagini")
+        if "slide" in ALL_B_SCENES and not (self.current_couple_a in IMAGE_SCENES and "slide" in IMAGE_SCENES):
             self.current_b_scene = "slide"
             self.last_shown_b_scene = "slide"
         self.couple_start_time = current_time
@@ -1149,6 +1165,15 @@ class HybridCouplesModel:
         pool = ALL_B_SCENES or COUPLES.get(couple_a, [])
         if not pool:
             return None
+        # "Mai immagini con immagini" (vedi IMAGE_SCENES): una _A con immagini prende solo _B
+        # senza immagini. Se non ne resta nessuna, il vincolo cede (meglio una coppia "vietata"
+        # che nessuna _B) e lo si scrive nel log.
+        if couple_a in IMAGE_SCENES:
+            allowed = [b for b in pool if b not in IMAGE_SCENES]
+            if allowed:
+                pool = allowed
+            else:
+                debug_log(f"[IMMAGINI] nessuna _B senza immagini per {couple_a}: vincolo ignorato")
         if exclude and len(pool) > 1:
             choices = [b for b in pool if b != exclude]
             if choices:

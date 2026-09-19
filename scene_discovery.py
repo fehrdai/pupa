@@ -96,6 +96,49 @@ def slideshow_input_names(all_inputs):
     }
 
 
+IMAGE_INPUT_KINDS = ("slideshow", "image_source")
+
+
+def image_input_names(all_inputs):
+    """Nomi di tutte le sorgenti che mostrano IMMAGINI (presentazioni 'slideshow' e immagini
+    singole 'image_source'), per KIND e non per nome (2026-09-20, regola "mai immagini con
+    immagini" - vedi brain.IMAGE_SCENES)."""
+    names = set()
+    for i in all_inputs:
+        kind = i.get("unversionedInputKind") or i.get("inputKind") or ""
+        if i.get("inputName") and any(kind == k or kind.startswith(k) for k in IMAGE_INPUT_KINDS):
+            names.add(i["inputName"])
+    return names
+
+
+def scenes_with_images(scene_names, get_item_names, image_names, all_scene_names, max_depth=6):
+    """Insieme delle scene di `scene_names` che contengono IMMAGINI, direttamente o dentro una
+    scena annidata (una scena che ne contiene un'altra eredita le sue immagini).
+    `get_item_names(scena)` -> nomi degli scene item (OBS: get_scene_item_source_names).
+    Riconoscimento per CONTENUTO, non per nome della scena."""
+    all_scene_names = set(all_scene_names)
+    cache = {}
+
+    def has_images(scene, depth, seen):
+        if scene in cache:
+            return cache[scene]
+        if depth > max_depth or scene in seen:
+            return False
+        seen = seen | {scene}
+        found = False
+        for name in get_item_names(scene) or []:
+            if name in image_names:
+                found = True
+            elif name in all_scene_names and has_images(name, depth + 1, seen):
+                found = True
+            if found:
+                break
+        cache[scene] = found
+        return found
+
+    return {s for s in scene_names if has_images(s, 0, frozenset())}
+
+
 def is_slide_scene(scene_item_names, slide_input_names):
     """True se la scena contiene almeno una sorgente slideshow tra i suoi
     scene item - riconoscimento per CONTENUTO, non per nome della scena."""
