@@ -70,6 +70,7 @@ SILENCE_HOLD_S = 1.5          # da quanto e' sotto soglia prima di dissolvere a 
 # ---------------------------------------------------------------------------
 COLORS = {"red": (255, 0, 0), "green": (0, 255, 0), "blue": (0, 0, 255)}
 WHITE = (255, 255, 255)
+SINGLE_COLOR = True           # True: UN colore alla volta su entrambi i fari (come PUPA live: solo rosso, solo verde o solo blu, poi ruota); False: coppia, un colore diverso per faro. Operatore 2026-09-19.
 PHRASE_BEATS = 32             # ogni quanti beat (~una frase) ruota la coppia colore
 PHRASE_S_MIN = 10.0           # limiti in secondi (BPM assente/strano)
 PHRASE_S_MAX = 40.0

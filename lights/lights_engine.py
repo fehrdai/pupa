@@ -42,7 +42,9 @@ def _ease(dt, tau):
     return 1.0 - math.exp(-dt / tau) if tau > 0 else 1.0
 
 
-COLOR_PAIRS = [(a, b) for a in C.COLORS for b in C.COLORS if a != b]  # coppie ordinate, un colore per faro
+# Coppie (colore faro 1, colore faro 2): con SINGLE_COLOR entrambi i fari hanno lo stesso colore (ruota tra i primari),
+# altrimenti tutte le coppie ordinate di colori diversi.
+COLOR_PAIRS = [(a, a) for a in C.COLORS] if C.SINGLE_COLOR else [(a, b) for a in C.COLORS for b in C.COLORS if a != b]
 
 
 class LightsEngine:
