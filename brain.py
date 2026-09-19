@@ -611,6 +611,17 @@ MONITOR_BREATHER_BARS = 2  # durata del respiro quando innescato, in battute - f
 # prevista (bars_needed x 4 battiti x 60/BPM), e "both_off" ha in piu' un tetto
 # assoluto. Valori di partenza da tarare.
 MONITOR_WATCHDOG_FACTOR = 1.5
+# RITMO DEI MONITOR A CALM ALTO (2026-09-19, operatore: "ritmo monitor magari tarato con piu'
+# secondi: 10 build, 20 relax"): durata TARGET in SECONDI di ogni fase A/B, per stato, convertita
+# in battute dal BPM (round). Sostituisce MONITOR_SEQUENCE_BARS x monitor_bars a quel livello: in
+# BUILD/GROOVE/DROP/PEAK 10s, in RELAX/INTRO/BREAK 20s (prima ~4s in BUILD, ~15s in RELAX).
+# Solo per i livelli elencati (CALM 0-2 restano invariati); i respiri both_on/both_off non ne
+# fanno parte (breather_len). Estensione oltre BUILD/RELAX (GROOVE/DROP/PEAK 10s, INTRO/BREAK 20s)
+# = mia scelta per coerenza "energico 10s / calmo 20s", non richiesta esplicita.
+CALM_MONITOR_PHASE_S = {
+    3: {State.INTRO: 20.0, State.BREAK: 20.0, State.RELAX: 20.0,
+        State.GROOVE: 10.0, State.BUILD: 10.0, State.DROP: 10.0, State.PEAK: 10.0},
+}
 MONITOR_BOTH_OFF_MAX_S = 8.0
 MONITOR_BREATHER_CHOICE_WEIGHTS = {
     State.INTRO:  {"both_off": 0.6, "both_on": 0.4},
@@ -1265,13 +1276,18 @@ class HybridCouplesModel:
             return {"show1": True, "show2": True}
 
         in_breather = self.monitor_seq_phase in ("both_on", "both_off")
-        bars_needed = MONITOR_BREATHER_BARS if in_breather \
-            else MONITOR_SEQUENCE_BARS.get(self.current_state, 2)
-        # CALM MODE (2026-07-30): ogni fase (A/B normale O un respiro) dura
-        # piu' a lungo quanto piu' alto e' calm_level - vedi CALM_MULTIPLIERS.
-        # Dal 2026-09-18 il respiro ha un suo moltiplicatore (breather_len)
-        # invece di monitor_bars: il nero pieno non si allunga con la lentezza.
-        bars_needed = max(1, round(bars_needed * self._calm("breather_len" if in_breather else "monitor_bars")))
+        # Durata target in secondi a CALM alto (vedi CALM_MONITOR_PHASE_S) - solo per le fasi A/B.
+        phase_s = None if in_breather else CALM_MONITOR_PHASE_S.get(self.calm_level, {}).get(self.current_state)
+        if phase_s and self.last_bpm > 0:
+            bars_needed = max(1, round(phase_s / (BEATS_PER_BAR * 60.0 / self.last_bpm)))
+        else:
+            bars_needed = MONITOR_BREATHER_BARS if in_breather \
+                else MONITOR_SEQUENCE_BARS.get(self.current_state, 2)
+            # CALM MODE (2026-07-30): ogni fase (A/B normale O un respiro) dura
+            # piu' a lungo quanto piu' alto e' calm_level - vedi CALM_MULTIPLIERS.
+            # Dal 2026-09-18 il respiro ha un suo moltiplicatore (breather_len)
+            # invece di monitor_bars: il nero pieno non si allunga con la lentezza.
+            bars_needed = max(1, round(bars_needed * self._calm("breather_len" if in_breather else "monitor_bars")))
 
         if self._monitor_watchdog_expired(current_time, bars_needed):
             stalled_phase = self.monitor_seq_phase
@@ -1314,6 +1330,8 @@ class HybridCouplesModel:
                           f"bar={current_bar} bars_needed={bars_needed}")
         else:
             _, hi = MONITOR_ALTERNATION_INTERVAL_RANGE.get(self.current_state, (2.0, 4.0))
+            if phase_s:
+                hi = phase_s  # CALM alto: stessa durata target anche senza BPM stimato
             if current_time - self.monitor_last_flip_time >= hi:
                 self.monitor_last_flip_time = current_time
                 self.monitor_last_flip_bar = self.last_beat_count // BEATS_PER_BAR
